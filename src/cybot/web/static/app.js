@@ -338,9 +338,23 @@ function notionPrompt() {
     </section>`;
 }
 
+function trackRun(run) {
+  if (!run || !run.id) return;
+  const rest = state.runs.filter((item) => item.id !== run.id);
+  state.runs = [{ ...run }, ...rest];
+}
+
 function runLabel(run) {
   const when = String(run.created_at || "").replace("T", " ").slice(0, 16);
-  return `${when} ${run.target || "run"} (${run.status || "unknown"})`;
+  return `${when} ${run.target || "run"} (${pickerStatus(run.status)})`;
+}
+
+function pickerStatus(status) {
+  if (status === "complete") return "Complete";
+  if (status === "running") return "Running";
+  if (status === "error") return "Failed";
+  if (status === "refused") return "Refused";
+  return statusLabel(status);
 }
 
 function runPicker() {
@@ -806,6 +820,7 @@ function scopeFromForm(form) {
 async function refreshRunData() {
   if (!state.run) return;
   state.run = await api(`/api/runs/${state.run.id}`);
+  trackRun(state.run);
   state.findings = (await api(`/api/runs/${state.run.id}/findings`)).findings;
   state.audit = (await api("/api/audit")).audit;
   if (state.run.status === "running") return;
@@ -870,7 +885,7 @@ document.body.addEventListener("submit", async (event) => {
       render();
       const run = await api("/api/runs", { method: "POST", body: JSON.stringify(body) });
       state.run = run;
-      state.runs = [run, ...state.runs.filter((item) => item.id !== run.id)];
+      trackRun(run);
       watch(run.id);
       if (run.status !== "running") {
         await refreshRunData();

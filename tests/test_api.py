@@ -42,6 +42,9 @@ def test_demo_run_refuses_out_of_scope_names_and_writes_a_report(client):
     audit = client.get("/api/audit", headers=HEADERS).json()["audit"]
     assert any(row["decision"] == "refused" for row in audit)
     assert any("authorization" in row["detail"].lower() or "auth=" in row["detail"] for row in audit)
+    listed = client.get("/api/runs", headers=HEADERS).json()["runs"]
+    match = next(row for row in listed if row["id"] == body["id"])
+    assert match["status"] == "complete"
 
 
 def test_secret_is_encrypted_and_not_returned(client, cfg):
