@@ -76,6 +76,11 @@ class RunIn(ScopeIn):
     attestation: str = ""
 
 
+class AssistIn(BaseModel):
+    action: str = "ask"
+    message: str = ""
+
+
 class TerminalIn(BaseModel):
     command: str = ""
     confirm: bool = False
@@ -353,6 +358,23 @@ def create_app(config: Config | None = None, connector_fetch=None) -> FastAPI:
             return {"findings": service.findings(run_id)}
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/findings/{finding_id}/assist")
+    async def assist(finding_id: str, body: AssistIn, request: Request):
+        authed(request)
+        try:
+            return await service.assist(finding_id, body.action, body.message)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/findings/{finding_id}/markdown")
+    def finding_markdown(finding_id: str, request: Request):
+        authed(request)
+        try:
+            text = service.finding_markdown(finding_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return Response(content=text, media_type="text/markdown; charset=utf-8")
 
     @app.post("/api/findings/{finding_id}/explain")
     async def explain(finding_id: str, request: Request):

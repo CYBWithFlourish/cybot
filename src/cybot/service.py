@@ -500,6 +500,7 @@ class Service:
                     "confidence": row.get("confidence") or "",
                     "repro": row.get("repro") or "",
                     "needs_human_validation": bool(row.get("needs_human", 1)),
+                    "chat": self.store.chat(row["id"]),
                 }
             )
         return rows
@@ -537,6 +538,67 @@ class Service:
         plain = await llm.explain(finding)
         self.store.set_finding_plain(finding_id, plain)
         return {"id": finding_id, "plain": plain}
+
+    async def assist(self, finding_id: str, action: str, message: str = "") -> dict:
+        from cybot.assist import ACTIONS, SYSTEM, context_block, guard_answer, template_answer
+        from cybot.kb import search
+
+        finding = self.store.get_finding(finding_id)
+        if not finding:
+            raise ValueError("Unknown finding.")
+        chosen = (action or "ask").strip().lower()
+        if chosen not in ACTIONS:
+            chosen = "ask"
+        book = loads_playbook(finding.get("playbook")) or template_playbook(finding)
+        kb = []
+        try:
+            kb = await search(
+                await self._gateway(),
+                self.store.settings(),
+                f"{finding.get('title') or ''} {chosen}",
+                k=4,
+                catalog_only=True,
+            )
+        except Exception:
+            kb = []
+        asked = (message or "").strip() or chosen
+        self.store.add_chat(finding_id, "user", asked[:2000])
+        fallback = template_answer(chosen, finding, book)
+        answer = fallback
+        source = "template"
+        try:
+            llm = await self.build_llm()
+            if getattr(llm, "name", "") != "mock" and hasattr(llm, "complete"):
+                raw = await llm.complete(
+                    SYSTEM,
+                    context_block(finding, book, kb) + f"\n\nAction: {chosen}\nMessage: {(message or '')[:1000]}",
+                )
+                guarded = guard_answer(raw, str(finding.get("host") or ""))
+                if guarded:
+                    answer = guarded
+                    source = "model"
+        except Exception:
+            answer = fallback
+            source = "template"
+        self.store.add_chat(finding_id, "assistant", answer)
+        return {
+            "id": finding_id,
+            "action": chosen,
+            "source": source,
+            "answer": answer,
+            "history": self.store.chat(finding_id),
+        }
+
+    def finding_markdown(self, finding_id: str) -> str:
+        from cybot.report import finding_card_markdown
+
+        finding = self.store.get_finding(finding_id)
+        if not finding:
+            raise ValueError("Unknown finding.")
+        finding = dict(finding)
+        finding["playbook"] = loads_playbook(finding.get("playbook")) or template_playbook(finding)
+        finding["needs_human_validation"] = bool(finding.get("needs_human", 1))
+        return finding_card_markdown(finding)
 
     async def search_memory(self, query: str, program: str = "") -> dict:
         gateway = await self._gateway()

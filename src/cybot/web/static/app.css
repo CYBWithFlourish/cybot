@@ -372,6 +372,8 @@ details.playbook code { font-family: var(--mono); font-size: 13px; word-break: b
   .log-card .log { flex: 1; min-height: 520px; max-height: none; }
 }
 
+.chat-log { margin-top: var(--space-2); }
+.chat-log p { white-space: pre-wrap; word-break: break-word; }
 .term-log { list-style: none; padding: 0; margin: 16px 0 0; }
 .term-log li { margin: 0 0 12px; }
 .term-out {

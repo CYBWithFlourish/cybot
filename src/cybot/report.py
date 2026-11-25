@@ -1,13 +1,122 @@
 from __future__ import annotations
 
+import re
+
 from fpdf import FPDF
 from fpdf.enums import WrapMode
+
+from cybot.redact import redact
 
 _ORDER = {"high": 0, "medium": 1, "low": 2, "info": 3}
 
 
 def sort_findings(findings: list[dict]) -> list[dict]:
     return sorted(findings, key=lambda row: (_ORDER.get(row.get("severity", "info"), 9), row.get("title", "")))
+
+
+def finding_card_markdown(finding: dict) -> str:
+    """HackerOne and Bugcrowd style note. Evidence is redacted. Not a confirmed issue."""
+    from cybot.playbook import classify, cwe_numbers, loads_playbook
+
+    book = loads_playbook(finding.get("playbook")) or {}
+    host = finding.get("host") or ""
+    title = finding.get("title") or "Finding"
+    severity = finding.get("severity") or "info"
+    kind = book.get("class") or classify(finding)
+    cwes = cwe_numbers(finding, kind)
+    weakness = f"CWE-{cwes[0]}" if cwes else "Not classified"
+    rationale = _cvss_rationale(str(finding.get("evidence") or ""), severity)
+    steps = _repro_steps(finding, book)
+    refs = [
+        f"- {item.get('label')}: {item.get('url')}"
+        for item in (book.get("references") or [])
+        if item.get("url")
+    ]
+    further = [
+        f"- {item.get('label')}: {item.get('url')}"
+        for item in (book.get("further_reading") or [])
+        if item.get("url")
+    ]
+    confidence = finding.get("confidence") or "n/a"
+    human = "yes" if finding.get("needs_human", finding.get("needs_human_validation", 1)) else "no"
+    lines = [
+        f"## {title}",
+        "",
+        f"- Severity: {severity}",
+        f"- Severity rationale: {rationale}",
+        f"- Asset: `{host}`",
+        f"- Weakness: {weakness}",
+        "",
+        "### Summary",
+        "",
+        redact(str(finding.get("plain") or book.get("why") or "Reconnaissance note. Not confirmed.")),
+        "",
+        "### Steps to reproduce",
+        "",
+    ]
+    lines.extend(steps or ["1. Review the saved evidence. A person must retest it inside program scope."])
+    lines.extend(
+        [
+            "",
+            "### Evidence",
+            "",
+            redact(str(finding.get("evidence") or "No response snippet was stored.")),
+            "",
+            "### Impact",
+            "",
+            str(book.get("impact") or "Unverified until a person retests it."),
+            "",
+            "### Suggested fix",
+            "",
+            _fix_line(kind, host),
+            "",
+            "### References",
+            "",
+        ]
+    )
+    lines.extend(refs or ["- No reference links were stored."])
+    if further:
+        lines.extend(["", "### Further reading", ""])
+        lines.extend(further)
+    lines.extend(
+        [
+            "",
+            "### Validation",
+            "",
+            f"- Confidence: {confidence}",
+            f"- Needs human validation: {human}",
+            "",
+            "This is not a confirmed vulnerability. Stay inside the program scope.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _cvss_rationale(evidence: str, severity: str) -> str:
+    match = re.search(r"CVSS[^.;]{0,40}", evidence, re.I)
+    if match:
+        return f"{match.group(0).strip()} (from the stored note, not a confirmed score on this asset)."
+    return f"Mapped from CYBOT severity '{severity}'. Not a confirmed CVSS score."
+
+
+def _repro_steps(finding: dict, book: dict) -> list[str]:
+    steps = []
+    repro = redact(str(finding.get("repro") or "")).strip()
+    if repro:
+        for index, line in enumerate(repro.splitlines(), start=1):
+            if line.strip():
+                steps.append(f"{index}. `{line.strip()}`")
+    start = len(steps) + 1
+    for offset, item in enumerate(book.get("verify") or []):
+        steps.append(f"{start + offset}. {item}")
+    return steps[:8]
+
+
+def _fix_line(kind: str, host: str) -> str:
+    from cybot.assist import _fix_text
+
+    return _fix_text(kind, host or "the asset")
 
 
 def render_markdown(run: dict, findings: list[dict], audit: list[dict]) -> str:
@@ -39,18 +148,7 @@ def render_markdown(run: dict, findings: list[dict], audit: list[dict]) -> str:
         lines.append("No findings were recorded.")
         lines.append("")
     for finding in findings:
-        lines.extend(
-            [
-                f"### [{finding['severity']}] {finding['title']}",
-                "",
-                f"- Host: `{finding['host']}`",
-                f"- Tool: `{finding['tool']}`",
-                f"- Evidence: {finding['evidence']}",
-                "",
-                finding.get("plain") or "",
-                "",
-            ]
-        )
+        lines.append(finding_card_markdown(finding))
         book = loads_playbook(finding.get("playbook"))
         if book:
             lines.extend(render_playbook_markdown(book))

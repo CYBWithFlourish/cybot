@@ -105,6 +105,19 @@ TOOLS = [
         },
     },
     {
+        "name": "finding_assist",
+        "description": "Guidance for one finding. Manual retest only. No exploit code. Actions: explain, impact, retest, fix, research, ask.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "finding_id": {"type": "string"},
+                "action": {"type": "string"},
+                "message": {"type": "string"},
+            },
+            "required": ["finding_id"],
+        },
+    },
+    {
         "name": "explain_finding",
         "description": "Plain-English explanation of one finding. No exploit steps.",
         "inputSchema": {
@@ -247,6 +260,12 @@ class MCPServer:
             )
         elif name == "get_playbook":
             payload = self.service.playbook(str(arguments.get("finding_id") or ""))
+        elif name == "finding_assist":
+            payload = await self.service.assist(
+                str(arguments.get("finding_id") or ""),
+                str(arguments.get("action") or "ask"),
+                str(arguments.get("message") or ""),
+            )
         elif name == "explain_finding":
             payload = await self.service.explain(str(arguments.get("finding_id") or ""))
         elif name == "get_report":

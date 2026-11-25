@@ -379,18 +379,21 @@ function findingsView() {
   if (!groups.length) {
     return `${history}${targetNotes()}${prompt}<section class="card"><h2>Findings</h2><p class="empty">No findings yet. A refused target is written to the authorization log, not listed here.</p></section>`;
   }
+  const exportLink = state.run
+    ? `<a class="btn" href="/api/runs/${esc(state.run.id)}/report.md">Export report</a>`
+    : "";
   const cards = groups.map((group) => `
-    <article class="finding">
+    <article class="finding" data-testid="finding-card">
       <span class="sev ${esc(group.severity)}">${esc(group.severity)}</span>
       <strong>${esc(group.title)}</strong>
       <p class="evidence">${esc(group.hosts.length)} host${group.hosts.length === 1 ? "" : "s"} - ${esc(group.hosts.join(", "))} - ${esc(group.tool)}</p>
-      ${group.confidence ? `<p class="evidence">Confidence ${esc(group.confidence)}. Needs human validation.</p>` : ""}
-      ${group.repro ? `<pre class="log">${esc(group.repro)}</pre>` : ""}
+      ${submissionCard(group)}
       ${group.explained ? `<p class="plain" id="plain-${esc(group.id)}">${esc(group.plain)}</p>` : `<p class="plain muted" id="plain-${esc(group.id)}"></p>`}
       ${playbookDetails(group.playbook)}
+      ${askPanel(group)}
       <button class="btn" type="button" data-action="explain" data-id="${esc(group.id)}" data-testid="explain">Explain</button>
     </article>`).join("");
-  return `${history}${prompt}<section class="card" data-testid="findings"><h2>Findings</h2><p class="help">Same note on more than one host is grouped. The host count is how many in-scope names shared that type. Explain writes one short paragraph for the group.</p>${cards}</section>`;
+  return `${history}${prompt}<section class="card" data-testid="findings"><h2>Findings</h2><p class="help">Each card is a draft for a person to retest. Export report downloads the run as Markdown.</p><div class="row">${exportLink}</div>${cards}</section>`;
 }
 
 function targetNotes() {
@@ -414,6 +417,51 @@ function targetNotes() {
       <p class="evidence">Out: ${esc((scope.exclude || []).join(", ") || "none recorded")}</p>
       <p class="help">${esc(scope.reminder || "")}</p>
     </section>`;
+}
+
+function submissionCard(group) {
+  const book = group.playbook || {};
+  const weakness = (book.references || []).map((item) => item.label).find((label) => String(label).startsWith("CWE-")) || "Not classified";
+  const impact = book.impact || "Unverified until a person retests it.";
+  const human = group.needsHuman === false ? "no" : "yes";
+  const chat = (group.chat || []).map((row) => `<p class="evidence"><strong>${esc(row.role)}</strong> ${esc(row.body)}</p>`).join("");
+  return `
+    <details class="playbook" open>
+      <summary>Submission card</summary>
+      <p><strong>Severity.</strong> ${esc(group.severity)}. Not a confirmed CVSS score.</p>
+      <p><strong>Asset.</strong> <code>${esc((group.hosts || []).join(", "))}</code></p>
+      <p><strong>Weakness.</strong> ${esc(weakness)}</p>
+      <p><strong>Summary.</strong> ${esc(group.plain || "")}</p>
+      <p><strong>Impact.</strong> ${esc(impact)}</p>
+      ${group.repro ? `<p><strong>Steps.</strong></p><pre class="log">${esc(group.repro)}</pre>` : ""}
+      ${group.evidence ? `<p><strong>Evidence.</strong> ${esc(group.evidence)}</p>` : ""}
+      <p><strong>Validation.</strong> Confidence ${esc(group.confidence || "n/a")}. Needs human validation: ${human}.</p>
+      <button class="btn" type="button" data-action="copy-card" data-id="${esc(group.id)}" data-testid="copy-card">Copy as Markdown</button>
+    </details>
+    <div class="chat-log" id="chat-${esc(group.id)}">${chat}</div>`;
+}
+
+function askPanel(group) {
+  const chips = [
+    ["explain", "Explain"],
+    ["impact", "Impact"],
+    ["retest", "Retest steps"],
+    ["fix", "Fix / remediation"],
+    ["research", "Related research"],
+  ].map(([action, label]) =>
+    `<button class="btn" type="button" data-action="assist" data-assist="${action}" data-id="${esc(group.id)}">${label}</button>`
+  ).join("");
+  return `
+    <details class="playbook" data-testid="ask-cybot">
+      <summary>Ask CYBOT</summary>
+      <p class="help">Guidance for a person to retest this in-scope asset. Not an exploit.</p>
+      <div class="row">${chips}</div>
+      <label for="ask-${esc(group.id)}">Question</label>
+      <textarea id="ask-${esc(group.id)}" data-chat="${esc(group.id)}" placeholder="Ask about this finding"></textarea>
+      <div class="row">
+        <button class="btn primary" type="button" data-action="assist" data-assist="ask" data-id="${esc(group.id)}">Send</button>
+      </div>
+    </details>`;
 }
 
 function furtherBlock(book) {
@@ -477,6 +525,9 @@ function groupFindings(rows) {
         playbook: row.playbook || null,
         confidence: row.confidence || "",
         repro: row.repro || "",
+        evidence: row.evidence || "",
+        needsHuman: row.needs_human_validation !== false,
+        chat: row.chat || [],
       });
       continue;
     }
@@ -1057,6 +1108,39 @@ document.body.addEventListener("click", async (event) => {
       const result = await api("/api/scope/check", { method: "POST", body: JSON.stringify(scopeFromForm(form)) });
       state.banner = { kind: result.allowed ? "ok" : "bad", text: result.reason };
       state.audit = (await api("/api/audit")).audit;
+      render();
+    } catch (error) {
+      state.banner = { kind: "bad", text: error.message };
+      render();
+    }
+    return;
+  }
+  if (action === "copy-card") {
+    try {
+      const response = await fetch(`/api/findings/${button.dataset.id}/markdown`);
+      const text = await response.text();
+      if (!response.ok) throw new Error(text.slice(0, 180) || "Could not copy.");
+      if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(text);
+      state.banner = { kind: "ok", text: "Markdown copied. Paste it into the program form." };
+      render();
+    } catch (error) {
+      state.banner = { kind: "bad", text: error.message };
+      render();
+    }
+    return;
+  }
+  if (action === "assist") {
+    button.disabled = true;
+    try {
+      const box = document.querySelector(`[data-chat="${button.dataset.id}"]`);
+      const result = await api(`/api/findings/${button.dataset.id}/assist`, {
+        method: "POST",
+        body: JSON.stringify({ action: button.dataset.assist || "ask", message: box ? box.value : "" }),
+      });
+      const row = state.findings.find((item) => item.id === button.dataset.id);
+      if (row) row.chat = result.history || [];
+      if (box) box.value = "";
+      state.banner = { kind: "ok", text: result.answer || "Saved." };
       render();
     } catch (error) {
       state.banner = { kind: "bad", text: error.message };

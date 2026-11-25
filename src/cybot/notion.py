@@ -11,6 +11,8 @@ import json
 import re
 from collections import Counter
 
+from cybot.redact import redact
+
 _RAW_ID = re.compile(r"^[0-9a-fA-F]{32}$")
 _UUID = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
@@ -335,8 +337,14 @@ def _report_blocks(findings: list[dict]) -> list[dict]:
     ]
     for finding in findings[:30]:
         blocks.append(_heading(f"[{finding.get('severity') or 'info'}] {finding.get('title') or ''}"))
-        body = f"{finding.get('host') or ''} - {finding.get('tool') or ''}. {finding.get('plain') or finding.get('evidence') or ''}"
+        body = redact(
+            f"{finding.get('host') or ''} - {finding.get('tool') or ''}. "
+            f"{finding.get('plain') or finding.get('evidence') or ''}"
+        )
         blocks.append(_paragraph(body))
+        repro = redact(str(finding.get("repro") or ""))[:300]
+        if repro:
+            blocks.append(_paragraph(f"Reproduce: {repro}"))
         book = finding.get("playbook")
         if isinstance(book, str):
             try:

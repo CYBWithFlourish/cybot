@@ -86,6 +86,13 @@ CREATE TABLE IF NOT EXISTS terminal (
   status TEXT NOT NULL,
   output TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS finding_chat (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  finding_id TEXT NOT NULL,
+  ts TEXT NOT NULL,
+  role TEXT NOT NULL,
+  body TEXT NOT NULL
+);
 """
 
 
@@ -345,6 +352,22 @@ class Store:
     def get_finding(self, finding_id: str) -> dict | None:
         row = self.conn.execute("SELECT * FROM findings WHERE id = ?", (finding_id,)).fetchone()
         return dict(row) if row else None
+
+    def add_chat(self, finding_id: str, role: str, body: str) -> int:
+        with self._lock:
+            cursor = self.conn.execute(
+                "INSERT INTO finding_chat(finding_id, ts, role, body) VALUES(?, ?, ?, ?)",
+                (finding_id, utcnow(), role[:20], body[:8000]),
+            )
+            self.conn.commit()
+            return int(cursor.lastrowid)
+
+    def chat(self, finding_id: str, limit: int = 40) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT id, ts, role, body FROM finding_chat WHERE finding_id = ? ORDER BY id DESC LIMIT ?",
+            (finding_id, limit),
+        ).fetchall()
+        return [dict(row) for row in reversed(rows)]
 
     def set_finding_plain(self, finding_id: str, plain: str) -> None:
         with self._lock:
