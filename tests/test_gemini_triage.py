@@ -55,9 +55,7 @@ def test_gemini_triage_requests_json_chunks_and_retries_503(monkeypatch):
             calls.append(json)
             if len(calls) == 1:
                 return _response(503, {})
-            items = [{"severity": "low", "plain": "Plain note."} for _ in range(8)]
-            if len(calls) > 2:
-                items = items[:2]
+            items = [{"severity": "low", "plain": "Plain note."} for _ in range(5)]
             text = json_lib.dumps({"items": items})
             return _response(
                 200,
@@ -70,5 +68,8 @@ def test_gemini_triage_requests_json_chunks_and_retries_503(monkeypatch):
     rows = [{"title": f"note {index}", "evidence": "header", "severity": "info"} for index in range(10)]
     reviewed = asyncio.run(llm.triage(rows))
     assert len(reviewed) == 10
-    assert calls[0]["generationConfig"]["responseMimeType"] == "application/json"
+    config = calls[0]["generationConfig"]
+    assert config["responseMimeType"] == "application/json"
+    assert config["responseSchema"]["type"] == "ARRAY"
+    assert config["maxOutputTokens"] >= 2048
     assert len(calls) == 3

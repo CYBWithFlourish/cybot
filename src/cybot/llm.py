@@ -45,8 +45,79 @@ SYSTEM_EXPLAIN = (
 )
 
 
+GEMINI_MAX_OUTPUT_TOKENS = 8192
+TRIAGE_CHUNK = 5
+
+TRIAGE_SCHEMA = {
+    "type": "ARRAY",
+    "items": {
+        "type": "OBJECT",
+        "properties": {
+            "severity": {"type": "STRING", "enum": ["info", "low", "medium", "high"]},
+            "plain": {"type": "STRING"},
+        },
+        "required": ["severity", "plain"],
+    },
+}
+
+NARRATIVE_SCHEMA = {
+    "type": "ARRAY",
+    "items": {
+        "type": "OBJECT",
+        "properties": {
+            "why": {"type": "STRING"},
+            "likelihood": {"type": "STRING"},
+            "impact": {"type": "STRING"},
+            "verify": {"type": "ARRAY", "items": {"type": "STRING"}},
+            "evidence": {"type": "ARRAY", "items": {"type": "STRING"}},
+            "false_positive": {"type": "ARRAY", "items": {"type": "STRING"}},
+            "next_steps": {"type": "ARRAY", "items": {"type": "STRING"}},
+        },
+        "required": ["why", "next_steps"],
+    },
+}
+
+STRICT_TRIAGE = (
+    "Return only a JSON array. No markdown, no prose, and no code fences. "
+    "One object per input, same order. Each object has severity and plain. "
+    "severity is only info, low, medium, or high."
+)
+
+STRICT_NARRATIVE = (
+    "Return only a JSON array. No markdown, no prose, and no code fences. "
+    "One object per input, same order. Each object has why, likelihood, impact, "
+    "verify, evidence, false_positive, and next_steps. Do not include URLs."
+)
+
+
+def snippet_text(raw: str, limit: int = 200) -> str:
+    return " ".join((raw or "").split())[:limit]
+
+
 class LLMError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, snippet: str = ""):
+        super().__init__(message)
+        self.snippet = snippet_text(snippet) if snippet else ""
+
+
+def failure_line(kind: str, name: str, exc: BaseException) -> str:
+    """Log line for a model failure. The reason keeps a single trailing period."""
+    reason = redact(str(exc)).replace("\n", " ").strip().rstrip(".")
+    reason = reason[:120]
+    if kind == "narrative":
+        action = "playbook narrative failed"
+        fallback = "Keeping the template."
+    else:
+        action = "triage failed"
+        fallback = "Keeping heuristic triage."
+    if reason:
+        head = f"Model ({name}) {action}: {reason}. {fallback}"
+    else:
+        head = f"Model ({name}) {action}. {fallback}"
+    snippet = snippet_text(getattr(exc, "snippet", "") or "")
+    if not snippet:
+        return head
+    return f"{head} Snippet: {snippet}"
 
 
 class LLM(Protocol):
@@ -106,9 +177,6 @@ def parse_tools(raw: str, allowed: list[str]) -> list[str]:
     return picked or list(allowed)
 
 
-TRIAGE_CHUNK = 8
-
-
 def triage_chunks(rows: list[dict], size: int = TRIAGE_CHUNK) -> list[list[dict]]:
     if size < 1:
         size = TRIAGE_CHUNK
@@ -125,36 +193,196 @@ def triage_brief(rows: list[dict]) -> list[dict]:
 async def triage_rows(complete, rows: list[dict]) -> list[dict]:
     reviewed: list[dict] = []
     for chunk in triage_chunks(rows):
-        raw = await complete(SYSTEM_TRIAGE, json.dumps(triage_brief(chunk)))
-        reviewed.extend(parse_triage(raw, len(chunk)))
+        user = json.dumps(triage_brief(chunk))
+        raw = await complete(SYSTEM_TRIAGE, user)
+        try:
+            reviewed.extend(parse_triage(raw, len(chunk)))
+            continue
+        except LLMError:
+            pass
+        try:
+            retried = await complete(STRICT_TRIAGE, user)
+        except LLMError as exc:
+            if not exc.snippet:
+                exc.snippet = snippet_text(raw)
+            raise
+        try:
+            reviewed.extend(parse_triage(retried, len(chunk)))
+        except LLMError as exc:
+            if not exc.snippet:
+                exc.snippet = snippet_text(retried or raw)
+            raise
     return reviewed
 
 
 def parse_triage(raw: str, count: int) -> list[dict]:
-    data = _json(raw)
-    items = data.get("items") if isinstance(data, dict) else None
+    try:
+        data = parse_model_json(raw, prefer="array")
+    except LLMError:
+        raise
+    items = _triage_items(data)
     if not isinstance(items, list):
-        raise LLMError("Triage response was not a list.")
+        raise LLMError("Triage response was not a list.", snippet=raw)
     if len(items) != count:
-        raise LLMError("Triage response length did not match the findings.")
+        raise LLMError("Triage response length did not match the findings.", snippet=raw)
     return items
 
 
+def parse_model_json(raw: str, *, prefer: str | None = None):
+    """Parse almost-JSON model text.
+
+    Strips code fences, takes the first array or object, repairs trailing
+    commas, and closes a truncated tail.
+    """
+    text = strip_fences(raw or "")
+    if not text:
+        raise LLMError("Model did not return JSON.", snippet=raw)
+    found = None
+    index = 0
+    while index < len(text):
+        if text[index] not in "{[":
+            index += 1
+            continue
+        value, consumed = _parse_at(text, index)
+        if value is None:
+            index += 1
+            continue
+        found = value
+        if prefer == "array" and isinstance(value, list):
+            return value
+        if prefer == "object" and isinstance(value, dict):
+            return value
+        if prefer is None:
+            return value
+        index = max(consumed, index + 1)
+    if found is not None:
+        return found
+    raise LLMError("Model returned invalid JSON.", snippet=text)
+
+
+def strip_fences(raw: str) -> str:
+    text = (raw or "").strip()
+    blocks = [block.strip() for block in _FENCE.findall(text) if block.strip()]
+    for block in blocks:
+        if "[" in block or "{" in block:
+            return block
+    if blocks:
+        return blocks[0]
+    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
+    text = re.sub(r"\s*```$", "", text)
+    return text.strip()
+
+
+def repair_trailing_commas(text: str) -> str:
+    previous = None
+    current = text
+    while current != previous:
+        previous = current
+        current = re.sub(r",(\s*[\]}])", r"\1", current)
+    return current
+
+
+def close_truncated(text: str) -> str:
+    body = text.rstrip()
+    if body.endswith("\\"):
+        body = body[:-1]
+    body = re.sub(r",\s*$", "", body)
+    in_string = False
+    escape = False
+    stack: list[str] = []
+    for char in body:
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char in "{[":
+            stack.append(char)
+        elif char in "}]" and stack:
+            stack.pop()
+    if in_string:
+        body += '"'
+    for opener in reversed(stack):
+        body += "}" if opener == "{" else "]"
+    return repair_trailing_commas(body)
+
+
+def _balanced_slice(text: str, start: int) -> str | None:
+    stack: list[str] = []
+    in_string = False
+    escape = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char in "{[":
+            stack.append(char)
+        elif char in "}]":
+            if not stack:
+                return None
+            opener = stack.pop()
+            if (opener == "{" and char != "}") or (opener == "[" and char != "]"):
+                return None
+            if not stack:
+                return text[start : index + 1]
+    return None
+
+
+def _parse_at(text: str, start: int) -> tuple:
+    balanced = _balanced_slice(text, start)
+    options = []
+    consumed = start + 1
+    if balanced is not None:
+        options.append(balanced)
+        options.append(repair_trailing_commas(balanced))
+        consumed = start + len(balanced)
+    else:
+        closed = close_truncated(text[start:])
+        options.append(closed)
+        options.append(repair_trailing_commas(closed))
+        consumed = len(text)
+    for candidate in options:
+        if not candidate:
+            continue
+        try:
+            return json.loads(candidate), consumed
+        except json.JSONDecodeError:
+            continue
+    return None, start
+
+
+def _triage_items(data) -> list | None:
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        items = data.get("items")
+        if isinstance(items, list):
+            return items
+        if "severity" in data or "plain" in data:
+            return [data]
+    return None
+
+
 def _json(raw: str) -> dict:
-    text = raw.strip()
-    fenced = _FENCE.search(text)
-    if fenced:
-        text = fenced.group(1).strip()
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1:
-        raise LLMError("Model did not return JSON.")
     try:
-        data = json.loads(text[start : end + 1])
-    except json.JSONDecodeError as exc:
-        raise LLMError("Model returned invalid JSON.") from exc
+        data = parse_model_json(raw, prefer="object")
+    except LLMError:
+        raise
     if not isinstance(data, dict):
-        raise LLMError("Model JSON was not an object.")
+        raise LLMError("Model JSON was not an object.", snippet=raw)
     return data
 
 
@@ -235,18 +463,25 @@ class AnthropicLLM(OpenAICompatLLM):
 
 
 class GeminiLLM(OpenAICompatLLM):
-    async def complete(self, system: str, user: str, *, json_mode: bool = False) -> str:
+    async def complete(
+        self,
+        system: str,
+        user: str,
+        *,
+        json_mode: bool = False,
+        response_schema: dict | None = None,
+        max_output_tokens: int = GEMINI_MAX_OUTPUT_TOKENS,
+    ) -> str:
         model = self.model
         root = self.base_url.rstrip("/")
         url = f"{root}/v1beta/models/{model}:generateContent"
         headers = connector_headers(self.connector, self.api_key, "gemini")
-        generation = {"temperature": 0.1}
-        if json_mode:
-            generation["responseMimeType"] = "application/json"
-        body = {
-            "contents": [{"role": "user", "parts": [{"text": system + "\n\n" + user}]}],
-            "generationConfig": generation,
-        }
+        body = gemini_request_body(
+            system + "\n\n" + user,
+            json_mode=json_mode,
+            response_schema=response_schema,
+            max_output_tokens=max_output_tokens,
+        )
         return await _post_text(
             url,
             headers,
@@ -257,9 +492,33 @@ class GeminiLLM(OpenAICompatLLM):
 
     async def triage(self, rows: list[dict]) -> list[dict]:
         async def complete(system: str, user: str) -> str:
-            return await self.complete(system, user, json_mode=True)
+            return await self.complete(
+                system,
+                user,
+                json_mode=True,
+                response_schema=TRIAGE_SCHEMA,
+                max_output_tokens=GEMINI_MAX_OUTPUT_TOKENS,
+            )
 
         return await triage_rows(complete, rows)
+
+
+def gemini_request_body(
+    text: str,
+    *,
+    json_mode: bool = False,
+    response_schema: dict | None = None,
+    max_output_tokens: int = GEMINI_MAX_OUTPUT_TOKENS,
+) -> dict:
+    generation: dict = {"temperature": 0.1, "maxOutputTokens": max_output_tokens}
+    if json_mode or response_schema is not None:
+        generation["responseMimeType"] = "application/json"
+    if response_schema is not None:
+        generation["responseSchema"] = response_schema
+    return {
+        "contents": [{"role": "user", "parts": [{"text": text}]}],
+        "generationConfig": generation,
+    }
 
 
 def _pick_gemini_text(data: dict) -> str:
@@ -278,9 +537,13 @@ def _pick_gemini_text(data: dict) -> str:
             finish = str(candidates[0].get("finishReason") or "")
         detail = finish or "empty content"
         raise LLMError(f"Gemini returned no text ({detail}).")
-    for part in reversed(parts):
-        if isinstance(part, dict) and not part.get("thought") and isinstance(part.get("text"), str):
-            return part["text"]
+    chunks = [
+        part["text"]
+        for part in parts
+        if isinstance(part, dict) and not part.get("thought") and isinstance(part.get("text"), str) and part.get("text")
+    ]
+    if chunks:
+        return "".join(chunks)
     first = parts[0]
     if isinstance(first, dict) and isinstance(first.get("text"), str):
         return first["text"]

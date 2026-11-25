@@ -18,7 +18,7 @@ from cybot.partners import (
 )
 from cybot.partners import prior_match
 from cybot.playbook import prepare_playbooks
-from cybot.llm import LLM, sanitize_explanation
+from cybot.llm import LLM, failure_line, sanitize_explanation
 from cybot.policy import external_specs, rank, select_builtin
 from cybot.redact import redact
 from cybot.report import render_markdown, sort_findings
@@ -348,7 +348,12 @@ async def _body(
     finished = dict(finished)
     finished["status"] = "complete"
     try:
-        notes, enriched = await prepare_playbooks(llm, gateway, finished, saved, fetch=None)
+        def _narrative_failed(exc: BaseException) -> None:
+            store.event(run_id, "warn", failure_line("narrative", llm.name, exc))
+
+        notes, enriched = await prepare_playbooks(
+            llm, gateway, finished, saved, fetch=None, on_fail=_narrative_failed
+        )
         store.set_run_playbook(run_id, json.dumps(notes))
         for row in enriched:
             store.set_finding_playbook(row["id"], json.dumps(row.get("playbook") or {}))
@@ -493,12 +498,7 @@ async def _triage(llm: LLM, rows: list, *, store: Store | None = None, run_id: s
     except Exception as exc:
         reviewed = []
         if store is not None and run_id and llm.name != "mock":
-            reason = redact(str(exc)).replace("\n", " ")[:160]
-            store.event(
-                run_id,
-                "warn",
-                f"Model ({llm.name}) triage failed: {reason}. Keeping heuristic triage."[:240],
-            )
+            store.event(run_id, "warn", failure_line("triage", llm.name, exc))
     else:
         if store is not None and run_id and llm.name != "mock":
             store.event(run_id, "ok", f"Model ({llm.name}) triaged {len(reviewed)} notes.")

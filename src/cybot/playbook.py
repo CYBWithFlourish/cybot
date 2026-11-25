@@ -7,9 +7,20 @@ CYBOT never runs the suggested commands.
 
 from __future__ import annotations
 
+import inspect
 import json
 import re
 from urllib.parse import quote
+
+from cybot.llm import (
+    GEMINI_MAX_OUTPUT_TOKENS,
+    LLMError,
+    NARRATIVE_SCHEMA,
+    STRICT_NARRATIVE,
+    TRIAGE_CHUNK,
+    parse_model_json,
+    snippet_text,
+)
 
 DISCLAIMER = (
     "Only test in-scope assets with authorization. "
@@ -311,52 +322,88 @@ def merge_narrative(base: dict, narrative: dict) -> dict:
 
 
 def parse_narrative(raw: str, count: int) -> list[dict]:
-    text = (raw or "").strip()
-    fenced = re.search(r"```(?:json)?\s*(.*)```", text, re.S)
-    if fenced:
-        text = fenced.group(1).strip()
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1:
-        raise ValueError("Model did not return JSON.")
-    data = json.loads(text[start : end + 1])
-    items = data.get("items") if isinstance(data, dict) else None
+    try:
+        data = parse_model_json(raw, prefer="array")
+    except LLMError as exc:
+        if not exc.snippet:
+            exc.snippet = snippet_text(raw)
+        raise
+    items = data if isinstance(data, list) else None
+    if items is None and isinstance(data, dict) and isinstance(data.get("items"), list):
+        items = data.get("items")
     if not isinstance(items, list) or len(items) != count:
-        raise ValueError("Narrative length did not match the findings.")
+        raise LLMError("Narrative length did not match the findings.", snippet=raw)
     return [item if isinstance(item, dict) else {} for item in items]
 
 
-async def apply_narratives(llm, findings: list[dict], playbooks: list[dict]) -> list[dict]:
+def _schema_complete(llm):
+    complete = getattr(llm, "complete", None)
+    try:
+        parameters = inspect.signature(complete).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    return "response_schema" in parameters
+
+
+async def _narrative_complete(llm, system: str, user: str) -> str:
+    if _schema_complete(llm):
+        return await llm.complete(
+            system,
+            user,
+            json_mode=True,
+            response_schema=NARRATIVE_SCHEMA,
+            max_output_tokens=GEMINI_MAX_OUTPUT_TOKENS,
+        )
+    return await llm.complete(system, user)
+
+
+async def apply_narratives(llm, findings: list[dict], playbooks: list[dict], on_fail=None) -> list[dict]:
     if not findings:
         return []
     if llm is None or not hasattr(llm, "complete") or getattr(llm, "name", "") == "mock":
         return playbooks
-    brief = [
-        {
-            "title": row.get("title"),
-            "host": safe_host(str(row.get("host") or "")),
-            "evidence": str(row.get("evidence") or "")[:400],
-            "class": book["class"],
-        }
-        for row, book in zip(findings, playbooks)
-    ]
-    prompt = (
-        "Write unverified manual-research notes for a bug bounty tester. "
-        "Do not include URLs, payloads, or exploit steps. "
-        "verify must be safe observations such as reading headers or comparing a version. "
-        'Return JSON {"items":[{"why":"","likelihood":"","impact":"","verify":[],"evidence":[],"false_positive":[],"next_steps":[]}]} '
-        f"with {len(brief)} items in the same order.\n"
-        + json.dumps(brief)
-    )
-    try:
-        raw = await llm.complete(
-            "You write cautious reconnaissance guidance. You never provide exploit steps or URLs.",
-            prompt,
+    system = "You write cautious reconnaissance guidance. You never provide exploit steps or URLs."
+    merged: list[dict] = []
+    for start in range(0, len(findings), TRIAGE_CHUNK):
+        chunk_findings = findings[start : start + TRIAGE_CHUNK]
+        chunk_books = playbooks[start : start + TRIAGE_CHUNK]
+        brief = [
+            {
+                "title": row.get("title"),
+                "host": safe_host(str(row.get("host") or "")),
+                "evidence": str(row.get("evidence") or "")[:400],
+                "class": book["class"],
+            }
+            for row, book in zip(chunk_findings, chunk_books)
+        ]
+        prompt = (
+            "Write unverified manual-research notes for a bug bounty tester. "
+            "Do not include URLs, payloads, or exploit steps. "
+            "verify must be safe observations such as reading headers or comparing a version. "
+            "Return a JSON array with one object per input, same order. "
+            "Each object has why, likelihood, impact, verify, evidence, false_positive, and next_steps.\n"
+            + json.dumps(brief)
         )
-        items = parse_narrative(raw, len(playbooks))
-    except Exception:
-        return playbooks
-    return [merge_narrative(book, item) for book, item in zip(playbooks, items)]
+        raw = ""
+        try:
+            raw = await _narrative_complete(llm, system, prompt)
+            try:
+                items = parse_narrative(raw, len(chunk_books))
+            except LLMError:
+                raw = await _narrative_complete(llm, STRICT_NARRATIVE, prompt)
+                items = parse_narrative(raw, len(chunk_books))
+        except Exception as exc:
+            if not getattr(exc, "snippet", "") and raw:
+                try:
+                    exc.snippet = snippet_text(raw)
+                except Exception:
+                    pass
+            if on_fail is not None:
+                on_fail(exc)
+            merged.extend(chunk_books)
+            continue
+        merged.extend(merge_narrative(book, item) for book, item in zip(chunk_books, items))
+    return merged
 
 
 def target_notes(run: dict, findings: list[dict]) -> dict:
@@ -563,13 +610,15 @@ async def search_writeups(gateway, cve: str) -> list[dict]:
     return []
 
 
-async def prepare_playbooks(llm, gateway, run: dict, findings: list[dict], fetch=None) -> tuple[dict, list[dict]]:
+async def prepare_playbooks(llm, gateway, run: dict, findings: list[dict], fetch=None, on_fail=None) -> tuple[dict, list[dict]]:
     """Build target notes and one playbook per finding. Never raises."""
     notes = target_notes(run, findings)
     books = [template_playbook(row) for row in findings]
     try:
-        books = await apply_narratives(llm, findings, books)
-    except Exception:
+        books = await apply_narratives(llm, findings, books, on_fail=on_fail)
+    except Exception as exc:
+        if on_fail is not None:
+            on_fail(exc)
         books = [template_playbook(row) for row in findings]
     cves = []
     for row in findings:
