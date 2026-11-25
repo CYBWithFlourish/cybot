@@ -162,6 +162,7 @@ function shell() {
           ${navButton("mission", "Mission")}
           ${navButton("findings", "Findings")}
           ${navButton("report", "Report")}
+          ${navButton("terminal", "Terminal")}
           ${navButton("tools", "Tools")}
           ${navButton("settings", "Settings")}
         </nav>
@@ -173,7 +174,7 @@ function shell() {
         </header>
         ${mockFallback() ? `<div class="banner bad mock-banner" data-testid="mock-banner">This run fell back to Mock. The provider you selected did not answer. Check the key or the connector grant, then run again.</div>` : ""}
         <main class="layout">${view(settings)}</main>
-        <footer class="note">Scope is checked before any packet. No exploit templates, no fuzzers, no out-of-scope hosts.</footer>
+        <footer class="note">Scope is checked before any packet. Out-of-scope hosts are refused. Active-test waits for confirmation.</footer>
       </div>
     </div>`;
 }
@@ -183,6 +184,7 @@ function pageCopy() {
     mission: ["Mission", "Set the scope, pick the provider, and start recon."],
     findings: ["Findings", "Notes that share a type are grouped. Explain writes one short paragraph."],
     report: ["Report", "Final status, the provider that answered, and the export."],
+    terminal: ["Terminal", "Allowlisted commands only. Each host is checked before the process starts."],
     tools: ["Tools", "What this machine can run, and what CYBOT will not install."],
     settings: ["Settings", "OpenCode is primary. Gemini is the live connector. Ollama Cloud is optional."],
   };
@@ -198,6 +200,7 @@ function navButton(id, label) {
 function view(settings) {
   if (state.view === "findings") return findingsView();
   if (state.view === "report") return reportView();
+  if (state.view === "terminal") return terminalView();
   if (state.view === "tools") return toolsView();
   if (state.view === "settings") return settingsView(settings);
   return missionView(settings);
@@ -454,6 +457,34 @@ function groupFindings(rows) {
     if ((order[row.severity] ?? 9) < (order[current.severity] ?? 9)) current.severity = row.severity;
   }
   return [...groups.values()];
+}
+
+function terminalView() {
+  const run = state.run;
+  if (!run) {
+    return `<section class="card"><h2>Terminal</h2><p class="empty">Start a mission first. Commands are tied to that run and its scope.</p></section>`;
+  }
+  const lines = (state.terminal || []).map((row) =>
+    `<li><span class="pill">${esc(row.status)}</span> <code>${esc(row.command)}</code><pre class="term-out">${esc(row.output || "")}</pre></li>`
+  ).join("");
+  const mode = run.mode || "passive";
+  const hint = mode === "active-test"
+    ? "Active-test waits for confirmation. Submit once, then confirm."
+    : "Passive and soft-active commands run after the scope check.";
+  return `
+    <section class="card" data-testid="terminal">
+      <h2>Terminal</h2>
+      <p class="help">${hint} Mode: ${esc(mode)}. Output is capped and each command times out.</p>
+      <form id="terminalForm">
+        <label for="command">Command</label>
+        <input id="command" name="command" data-testid="terminal-command" autocomplete="off" placeholder="dig www.example.com" />
+        <div class="row">
+          <button class="btn primary" type="submit">Run</button>
+          <button class="btn" type="submit" name="confirm" value="1">Confirm</button>
+        </div>
+      </form>
+      <ol class="term-log">${lines || "<li class='empty'>No commands yet.</li>"}</ol>
+    </section>`;
 }
 
 function reportView() {
@@ -835,6 +866,19 @@ document.body.addEventListener("submit", async (event) => {
       }
       return;
     }
+    if (form.id === "terminalForm") {
+      const data = Object.fromEntries(new FormData(form).entries());
+      if (!state.run) throw new Error("Start a mission first.");
+      const result = await api(`/api/runs/${state.run.id}/terminal`, {
+        method: "POST",
+        body: JSON.stringify({ command: data.command || "", confirm: data.confirm === "1" }),
+      });
+      state.terminal = (await api(`/api/runs/${state.run.id}/terminal`)).lines;
+      state.banner = { kind: result.status === "refused" ? "bad" : "ok", text: result.output || result.status };
+      state.view = "terminal";
+      render();
+      return;
+    }
     if (form.id === "settingsForm") {
       const data = Object.fromEntries(new FormData(form).entries());
       const saved = await api("/api/settings", { method: "PUT", body: JSON.stringify(data) });
@@ -879,6 +923,14 @@ document.body.addEventListener("click", async (event) => {
       refreshRunData()
         .then(() => {
           if (state.view === "findings" || state.view === "report") render();
+        })
+        .catch(() => {});
+    }
+    if (state.view === "terminal" && state.run) {
+      api(`/api/runs/${state.run.id}/terminal`)
+        .then((body) => {
+          state.terminal = body.lines || [];
+          if (state.view === "terminal") render();
         })
         .catch(() => {});
     }

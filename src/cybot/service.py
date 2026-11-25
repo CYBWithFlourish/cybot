@@ -22,7 +22,9 @@ from cybot.notion import resolve_notion_choice, scope_from_programs
 from cybot.partners import search_memory as recall_memory
 from cybot.engine import execute_run, secrets_id
 from cybot.rails import derive_mode, permit_scan
+from cybot.rails import ScanBudget
 from cybot.scan import execute_locked, gate_plan, plan_commands, run_local_demo, tool_status
+from cybot.terminal import submit_command
 from cybot.llm import (
     AnthropicLLM,
     GeminiLLM,
@@ -62,6 +64,7 @@ class Service:
         self.connector_fetch = connector_fetch or _fetch_gateway
         self.probe_transport = None
         self.tasks: set[asyncio.Task] = set()
+        self._budgets: dict[str, ScanBudget] = {}
         self._run_choices: dict[str, tuple[str, str]] = {}
         self.make_net = self._default_make_net
 
@@ -444,6 +447,32 @@ class Service:
             self.store.event(run_id, "warn", note[:240])
         for note in execute_locked(accepted, timeout=8):
             self.store.event(run_id, "info", note[:240])
+
+    def run_terminal(self, run_id: str, command: str, *, confirmed: bool = False, runner=None, timeout: float = 15) -> dict:
+        run = self.store.get_run(run_id)
+        if not run:
+            raise ValueError("Unknown run.")
+        scope = parse_scope(json.loads(run["scope_json"]))
+        workdir = self.config.data_dir / "work" / run_id
+        allow_demo = run.get("target") == "127.0.0.1"
+        budget = self._budgets.setdefault(run_id, ScanBudget(max_requests=12, max_seconds=90))
+        return submit_command(
+            self.store,
+            run,
+            scope,
+            command,
+            workdir=workdir,
+            confirmed=confirmed,
+            timeout=timeout,
+            budget=budget,
+            allow_demo=allow_demo,
+            runner=runner,
+        )
+
+    def terminal_view(self, run_id: str) -> dict:
+        if not self.store.get_run(run_id):
+            raise ValueError("Unknown run.")
+        return {"lines": self.store.terminal_lines(run_id)}
 
     def status(self, run_id: str) -> dict:
         run = self.store.get_run(run_id)

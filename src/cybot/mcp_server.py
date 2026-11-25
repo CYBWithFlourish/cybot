@@ -66,6 +66,19 @@ TOOLS = [
         },
     },
     {
+        "name": "run_command",
+        "description": "Run one allowlisted command for a mission. Scope, rate, budget, and attestation rails apply. Active-test does not run until confirm is true.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "mission_id": {"type": "string"},
+                "command": {"type": "string"},
+                "confirm": {"type": "boolean"},
+            },
+            "required": ["mission_id", "command"],
+        },
+    },
+    {
         "name": "get_playbook",
         "description": "Research playbook for one finding: manual checks, evidence, and reference links. CYBOT does not run exploits.",
         "inputSchema": {
@@ -190,6 +203,12 @@ class MCPServer:
             payload = self.service.status(str(arguments.get("run_id") or ""))
         elif name == "get_findings":
             payload = {"findings": self.service.findings(str(arguments.get("run_id") or ""))}
+        elif name == "run_command":
+            payload = self.service.run_terminal(
+                str(arguments.get("mission_id") or ""),
+                str(arguments.get("command") or ""),
+                confirmed=bool(arguments.get("confirm")),
+            )
         elif name == "get_playbook":
             payload = self.service.playbook(str(arguments.get("finding_id") or ""))
         elif name == "explain_finding":

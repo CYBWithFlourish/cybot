@@ -342,6 +342,23 @@ details.playbook code { font-family: var(--mono); font-size: 13px; word-break: b
   .log-card .log { flex: 1; min-height: 520px; max-height: none; }
 }
 
+.term-log { list-style: none; padding: 0; margin: 16px 0 0; }
+.term-log li { margin: 0 0 12px; }
+.term-out {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  max-height: 40vh;
+  overflow: auto;
+  margin: 6px 0 0;
+}
+#terminalForm input { width: 100%; }
+@media (max-width: 720px) {
+  #terminalForm .row { display: flex; flex-direction: column; gap: 8px; }
+  #terminalForm .row .btn { width: 100%; }
+  .term-out { font-size: 14px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   * { scroll-behavior: auto !important; }
 }

@@ -78,6 +78,14 @@ CREATE TABLE IF NOT EXISTS reports (
   markdown TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS terminal (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL,
+  ts TEXT NOT NULL,
+  command TEXT NOT NULL,
+  status TEXT NOT NULL,
+  output TEXT NOT NULL
+);
 """
 
 
@@ -367,6 +375,22 @@ class Store:
             (limit,),
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def add_terminal(self, run_id: str, command: str, status: str, output: str) -> int:
+        with self._lock:
+            cursor = self.conn.execute(
+                "INSERT INTO terminal(run_id, ts, command, status, output) VALUES(?, ?, ?, ?, ?)",
+                (run_id, utcnow(), command[:500], status[:40], output[:8000]),
+            )
+            self.conn.commit()
+            return int(cursor.lastrowid)
+
+    def terminal_lines(self, run_id: str, limit: int = 80) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT id, ts, command, status, output FROM terminal WHERE run_id = ? ORDER BY id DESC LIMIT ?",
+            (run_id, limit),
+        ).fetchall()
+        return [dict(row) for row in reversed(rows)]
 
     def save_report(self, run_id: str, markdown: str) -> None:
         with self._lock:

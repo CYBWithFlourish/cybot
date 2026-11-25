@@ -228,6 +228,12 @@ The demo app is `src/cybot/demo_app.py`. It binds to `127.0.0.1` only and includ
 
 Optional tools are installed with `sh scripts/install-scan-tools.sh`. The script prints `ready` or `missing` for each binary and exits 0 even when some are absent. `sh scripts/install-scan-tools.sh --install` tries distro packages for `nmap`, `whatweb`, `wafw00f`, `dnsutils`, and `whois`, then still exits 0 if that fails.
 
+### Terminal
+
+The dashboard Terminal and the MCP tool `run_command` share one runner. The allowlist is `curl`, `httpx`, `gobuster`, `ffuf`, `dig`, `whois`, `nslookup`, `host`, `nmap`, `openssl`, `whatweb`, `wafw00f`, `jq`, `grep`, and `sed`. Every host, URL, and IP in the command is checked against the scope gate. Private and metadata addresses are refused, except the demo app on `127.0.0.1` during an active-test demo run. `sudo`, shell pipes, redirects, and writes outside the run directory are refused. Intrusive flags and `ffuf` / `gobuster` require active-test plus an attestation.
+
+Passive and soft-active commands run after the check. Active-test stays in confirm mode until you confirm. Each command has a timeout and an output cap, and it is written to the audit log. A suggest-and-check loop stops after 6 steps.
+
 ---
 
 ## License

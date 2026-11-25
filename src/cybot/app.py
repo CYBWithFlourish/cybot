@@ -76,6 +76,11 @@ class RunIn(ScopeIn):
     attestation: str = ""
 
 
+class TerminalIn(BaseModel):
+    command: str = ""
+    confirm: bool = False
+
+
 class ConnectorTestIn(BaseModel):
     provider: str
     id: str = ""
@@ -295,6 +300,22 @@ def create_app(config: Config | None = None, connector_fetch=None) -> FastAPI:
             return service.status(run_id)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/runs/{run_id}/terminal")
+    def get_terminal(run_id: str, request: Request):
+        authed(request)
+        try:
+            return service.terminal_view(run_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/runs/{run_id}/terminal")
+    def post_terminal(run_id: str, body: TerminalIn, request: Request):
+        authed(request)
+        try:
+            return service.run_terminal(run_id, body.command, confirmed=body.confirm)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/runs/{run_id}/events")
     async def events(run_id: str, request: Request):
