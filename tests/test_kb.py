@@ -110,6 +110,76 @@ def test_search_returns_the_seeded_catalog_entry_and_ingest_is_idempotent():
     assert all(row["url"] != "https://evil.example/atlas" for row in matches)
 
 
+def test_further_reading_skips_guide_chunks_and_keeps_catalog_urls():
+    guides = [
+        {
+            "id": f"guide-{index}",
+            "score": 0.99 - (index * 0.01),
+            "metadata": {
+                "title": f"Guide note {index}",
+                "url": "",
+                "type": "guide",
+                "section": "AGENTIC_SECURITY_GUIDE.md",
+                "source": SOURCE,
+                "kind": "guide",
+            },
+        }
+        for index in range(8)
+    ]
+    catalogs = [
+        ("Open Prompt Injection", "https://github.com/liu00222/Open-Prompt-Injection"),
+        ("Promptfoo", "https://github.com/promptfoo/promptfoo"),
+        ("Gandalf", "https://gandalf.lakera.ai/"),
+        ("PyRIT", "https://github.com/Azure/PyRIT"),
+    ]
+    catalog_rows = [
+        {
+            "id": f"catalog-{index}",
+            "score": 0.4 - (index * 0.01),
+            "metadata": {
+                "title": title,
+                "url": url,
+                "type": "Tool",
+                "section": "Evaluation",
+                "source": SOURCE,
+                "kind": "catalog",
+                "has_url": "yes",
+            },
+        }
+        for index, (title, url) in enumerate(catalogs)
+    ]
+    ranked = guides + catalog_rows
+
+    class Ranked:
+        def find(self, name):
+            return {"provider": name} if name == "pinecone" else None
+
+        async def call(self, provider, method, path, json=None, **_kwargs):
+            if path == "/embed":
+                return {"data": [{"values": [0.1, 0.2]}]}
+            if path == "/indexes":
+                return {"indexes": [{"name": "cybot"}]}
+            if path.endswith("/query"):
+                return {"matches": ranked[: json["topK"]]}
+            raise AssertionError(path)
+
+    settings = {"pinecone_index": "cybot"}
+    reading = asyncio.run(
+        further_reading(
+            Ranked(),
+            settings,
+            {"title": "prompt injection", "tool": "header_hygiene"},
+            {"class": "generic", "why": "prompt injection"},
+            k=5,
+        )
+    )
+    urls = [item["url"] for item in reading]
+    assert len(urls) >= 3
+    assert "https://github.com/liu00222/Open-Prompt-Injection" in urls
+    assert all(url.startswith("http") for url in urls)
+    assert all(item["label"] for item in reading)
+
+
 def test_playbook_lists_catalog_links_apart_from_cve_references():
     gateway = FakePinecone()
     settings = {"pinecone_index": "cybot", "pinecone_embed_model": "multilingual-e5-large"}

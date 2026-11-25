@@ -492,8 +492,9 @@ function terminalView() {
         <label for="command">Command</label>
         <input id="command" name="command" data-testid="terminal-command" autocomplete="off" placeholder="dig www.example.com" />
         <div class="row">
-          <button class="btn primary" type="submit">Run</button>
-          <button class="btn" type="submit" name="confirm" value="1">Confirm</button>
+          <button class="btn primary" type="submit" data-testid="terminal-run">Run</button>
+          <button class="btn" type="submit" name="confirm" value="1" data-testid="terminal-confirm">Confirm</button>
+          <button class="btn" type="submit" name="confirm" value="0" data-testid="terminal-deny">Deny</button>
         </div>
       </form>
       <ol class="term-log">${lines || "<li class='empty'>No commands yet.</li>"}</ol>
@@ -880,11 +881,19 @@ document.body.addEventListener("submit", async (event) => {
       return;
     }
     if (form.id === "terminalForm") {
-      const data = Object.fromEntries(new FormData(form).entries());
+      const submitter = event.submitter;
+      const data = new FormData(form);
+      if (submitter && submitter.name) data.set(submitter.name, submitter.value);
+      const fields = Object.fromEntries(data.entries());
       if (!state.run) throw new Error("Start a mission first.");
+      const choice = submitter && submitter.name === "confirm" ? submitter.value : "";
       const result = await api(`/api/runs/${state.run.id}/terminal`, {
         method: "POST",
-        body: JSON.stringify({ command: data.command || "", confirm: data.confirm === "1" }),
+        body: JSON.stringify({
+          command: fields.command || "",
+          confirm: choice === "1",
+          deny: choice === "0",
+        }),
       });
       state.terminal = (await api(`/api/runs/${state.run.id}/terminal`)).lines;
       state.banner = { kind: result.status === "refused" ? "bad" : "ok", text: result.output || result.status };

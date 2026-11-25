@@ -94,9 +94,11 @@ def catalog_documents(entries: list[dict] | None = None) -> list[dict]:
                 "metadata": {
                     "title": name[:200],
                     "url": url[:500],
-                    "type": kind[:80],
-                    "section": section[:120],
-                    "source": SOURCE,
+                        "type": kind[:80],
+                        "section": section[:120],
+                        "source": SOURCE,
+                        "kind": "catalog",
+                        "has_url": "yes",
                 },
             }
         )
@@ -120,6 +122,8 @@ def guide_documents(root: Path | None = None) -> list[dict]:
                         "type": "guide",
                         "section": path.name[:120],
                         "source": SOURCE,
+                        "kind": "guide",
+                        "has_url": "no",
                     },
                 }
             )
@@ -186,36 +190,16 @@ async def ingest(gateway, settings: dict) -> dict:
     return {"ok": True, "upserted": upserted, "namespace": KB_NAMESPACE, "ids": [row["id"] for row in documents]}
 
 
-async def search(gateway, settings: dict, query: str, k: int = 5) -> list[dict]:
-    if gateway is None or gateway.find("pinecone") is None:
-        return []
-    text = (query or "").strip()
-    if not text:
-        return []
-    index = await _index(gateway, settings)
-    if not index:
-        return []
-    vectors = await embed(gateway, settings, [text], "query")
-    if not vectors:
-        return []
-    data = await gateway.call(
-        "pinecone",
-        "POST",
-        f"/indexes/{index}/query",
-        json={
-            "namespace": KB_NAMESPACE,
-            "topK": max(1, min(int(k), 8)),
-            "vector": vectors[0],
-            "includeMetadata": True,
-        },
-    )
+def _match_rows(data, *, catalog_only: bool) -> list[dict]:
     allowed = catalog_urls()
     matches = []
     for row in (data or {}).get("matches") or []:
         if not isinstance(row, dict):
             continue
         metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
-        url = str(metadata.get("url") or "")
+        url = str(metadata.get("url") or "").strip()
+        if catalog_only and not url:
+            continue
         if url and url not in allowed:
             continue
         matches.append(
@@ -232,7 +216,56 @@ async def search(gateway, settings: dict, query: str, k: int = 5) -> list[dict]:
     return matches
 
 
-async def further_reading(gateway, settings: dict, finding: dict, book: dict, k: int = 4) -> list[dict]:
+async def _query_vectors(gateway, index: str, vector: list[float], top_k: int, metadata_filter: dict | None = None):
+    body = {
+        "namespace": KB_NAMESPACE,
+        "topK": top_k,
+        "vector": vector,
+        "includeMetadata": True,
+    }
+    if metadata_filter:
+        body["filter"] = metadata_filter
+    return await gateway.call("pinecone", "POST", f"/indexes/{index}/query", json=body)
+
+
+async def search(gateway, settings: dict, query: str, k: int = 5, *, catalog_only: bool = False) -> list[dict]:
+    if gateway is None or gateway.find("pinecone") is None:
+        return []
+    text = (query or "").strip()
+    if not text:
+        return []
+    index = await _index(gateway, settings)
+    if not index:
+        return []
+    vectors = await embed(gateway, settings, [text], "query")
+    if not vectors:
+        return []
+    limit = max(1, min(int(k), 8))
+    if not catalog_only:
+        data = await _query_vectors(gateway, index, vectors[0], limit)
+        return _match_rows(data, catalog_only=False)
+    # Prefer catalog rows. A kind filter works after ingest; a wide query still
+    # drops guide chunks that have an empty url when the index predates that flag.
+    filtered = None
+    try:
+        filtered = await _query_vectors(
+            gateway, index, vectors[0], limit, {"kind": {"$eq": "catalog"}}
+        )
+    except Exception:
+        filtered = None
+    matches = _match_rows(filtered, catalog_only=True) if filtered is not None else []
+    if len(matches) < limit:
+        wide = await _query_vectors(gateway, index, vectors[0], min(max(limit * 6, 24), 32))
+        seen = {row["url"] for row in matches}
+        for row in _match_rows(wide, catalog_only=True):
+            if row["url"] in seen:
+                continue
+            seen.add(row["url"])
+            matches.append(row)
+    return matches[:limit]
+
+
+async def further_reading(gateway, settings: dict, finding: dict, book: dict, k: int = 5) -> list[dict]:
     """Catalog links only. The model does not choose these URLs."""
     query = " ".join(
         [
@@ -242,7 +275,7 @@ async def further_reading(gateway, settings: dict, finding: dict, book: dict, k:
         ]
     )[:500]
     try:
-        matches = await search(gateway, settings, query, k=k)
+        matches = await search(gateway, settings, query, k=k, catalog_only=True)
     except Exception:
         return []
     allowed = catalog_urls()

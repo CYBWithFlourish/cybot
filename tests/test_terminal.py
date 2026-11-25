@@ -113,8 +113,33 @@ def test_intrusive_flags_need_active_test_and_attestation(tmp_path):
         attestation=ATTEST,
     )
     assert not script["ok"]
-    syn = prepare_command("nmap -sS www.example.com", SCOPE, mode="active-test", workdir=tmp_path, attestation=ATTEST)
+    syn = prepare_command("nmap -sS www.example.com", SCOPE, mode="soft-active", workdir=tmp_path)
     assert not syn["ok"]
+    assert "active-test" in syn["reason"]
+    bare = prepare_command(
+        "nmap -sS www.example.com",
+        SCOPE,
+        mode="active-test",
+        workdir=tmp_path,
+        attestation="short",
+    )
+    assert not bare["ok"]
+    allowed_syn = prepare_command(
+        "nmap -sS www.example.com",
+        SCOPE,
+        mode="active-test",
+        workdir=tmp_path,
+        attestation=ATTEST,
+    )
+    assert allowed_syn["ok"]
+    curl = prepare_command(
+        "curl -sS https://www.example.com/",
+        SCOPE,
+        mode="soft-active",
+        workdir=tmp_path,
+    )
+    assert curl["ok"]
+    assert curl["argv"][1] == "-sS"
     outside = prepare_command(
         "curl -o /etc/passwd https://www.example.com/",
         SCOPE,
@@ -170,6 +195,42 @@ def test_timeout_output_cap_confirm_and_step_cap(tmp_path):
     )
     assert ran["status"] == "ok"
     assert calls and calls[0][0] == "dig"
+
+    calls.clear()
+    pending = submit_command(
+        store,
+        _run("active-test", attestation=ATTEST),
+        SCOPE,
+        "curl -sS https://www.example.com/",
+        workdir=tmp_path,
+        confirmed=False,
+        runner=record,
+    )
+    assert pending["status"] == "pending"
+    assert calls == []
+    confirmed = submit_command(
+        store,
+        _run("active-test", attestation=ATTEST),
+        SCOPE,
+        "curl -sS https://www.example.com/",
+        workdir=tmp_path,
+        confirmed=True,
+        runner=record,
+    )
+    assert confirmed["status"] == "ok"
+    assert calls[0][:2] == ["curl", "-sS"]
+    denied = submit_command(
+        store,
+        _run("active-test", attestation=ATTEST),
+        SCOPE,
+        "curl -sS https://www.example.com/",
+        workdir=tmp_path,
+        denied=True,
+        runner=record,
+    )
+    assert denied["status"] == "refused"
+    assert "denied" in denied["output"].lower()
+    assert len(calls) == 1
 
     steps = {"n": 0}
 

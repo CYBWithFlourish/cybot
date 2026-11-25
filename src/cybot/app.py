@@ -79,6 +79,7 @@ class RunIn(ScopeIn):
 class TerminalIn(BaseModel):
     command: str = ""
     confirm: bool = False
+    deny: bool = False
 
 
 class ConnectorTestIn(BaseModel):
@@ -313,7 +314,7 @@ def create_app(config: Config | None = None, connector_fetch=None) -> FastAPI:
     def post_terminal(run_id: str, body: TerminalIn, request: Request):
         authed(request)
         try:
-            return service.run_terminal(run_id, body.command, confirmed=body.confirm)
+            return service.run_terminal(run_id, body.command, confirmed=body.confirm, denied=body.deny)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

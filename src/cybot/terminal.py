@@ -11,7 +11,7 @@ import shlex
 import subprocess
 from pathlib import Path
 
-from cybot.rails import BANNED_TOKENS, ScanBudget, attestation_ok, mode_rank
+from cybot.rails import BANNED_TOKENS, NMAP_RAW_FLAGS, ScanBudget, attestation_ok, mode_rank
 from cybot.scope import Scope, check_scope, ip_is_public
 
 ALLOWLIST = frozenset(
@@ -151,7 +151,11 @@ def prepare_command(
     path_error = _paths_ok(argv, workdir)
     if path_error:
         return {"ok": False, "reason": path_error, "argv": argv, "targets": []}
-    intrusive = binary in {"ffuf", "gobuster"} or any(part in INTRUSIVE_FLAGS for part in argv)
+    intrusive = (
+        binary in {"ffuf", "gobuster"}
+        or any(part in INTRUSIVE_FLAGS for part in argv)
+        or (binary == "nmap" and any(part in NMAP_RAW_FLAGS for part in argv))
+    )
     needed = "active-test" if intrusive else MIN_MODE[binary]
     if mode_rank(needed) > mode_rank(mode):
         return {
@@ -238,6 +242,7 @@ def submit_command(
     *,
     workdir: Path,
     confirmed: bool = False,
+    denied: bool = False,
     timeout: float = DEFAULT_TIMEOUT,
     budget: ScanBudget | None = None,
     rate_ok: bool = True,
@@ -261,6 +266,10 @@ def submit_command(
         store.audit("terminal", targets[:253], "refused", prepared["reason"], run.get("id"))
         store.add_terminal(run["id"], command, "refused", prepared["reason"])
         return {"status": "refused", "output": prepared["reason"], "command": command}
+    if denied:
+        store.audit("terminal", targets[:253], "refused", "Confirmation denied.", run.get("id"))
+        store.add_terminal(run["id"], command, "refused", "Confirmation denied.")
+        return {"status": "refused", "output": "Confirmation denied.", "command": command}
     if mode == "active-test" and not confirmed:
         store.audit("terminal", targets[:253], "pending", "Waiting for confirmation.", run.get("id"))
         store.add_terminal(run["id"], command, "pending", "Confirm this active-test command before it runs.")

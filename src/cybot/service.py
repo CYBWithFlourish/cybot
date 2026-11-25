@@ -448,7 +448,7 @@ class Service:
         for note in execute_locked(accepted, timeout=8):
             self.store.event(run_id, "info", note[:240])
 
-    def run_terminal(self, run_id: str, command: str, *, confirmed: bool = False, runner=None, timeout: float = 15) -> dict:
+    def run_terminal(self, run_id: str, command: str, *, confirmed: bool = False, denied: bool = False, runner=None, timeout: float = 15) -> dict:
         run = self.store.get_run(run_id)
         if not run:
             raise ValueError("Unknown run.")
@@ -463,6 +463,7 @@ class Service:
             command,
             workdir=workdir,
             confirmed=confirmed,
+            denied=denied,
             timeout=timeout,
             budget=budget,
             allow_demo=allow_demo,

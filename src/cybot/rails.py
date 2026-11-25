@@ -26,11 +26,13 @@ BANNED_TOKENS = (
     "--reg-read",
     "--priv-esc",
     "--script",
-    "-sS",
-    "-sU",
     "--privileged",
     "--blind",
 )
+
+# Nmap scan-type flags. They are not global bans: curl uses -sS for
+# silent plus show-errors. On nmap they need active-test and an attestation.
+NMAP_RAW_FLAGS = frozenset({"-sS", "-sU", "-sA", "-sW", "-sN", "-sF", "-sX", "-sM"})
 
 # Tools that send more than a single homepage or a fixed port connect.
 INTRUSIVE_TOOLS = frozenset(
@@ -112,6 +114,10 @@ def argv_is_safe(argv: list[str], mode: str) -> tuple[bool, str]:
     for part in argv[1:]:
         if part in BANNED_TOKENS or any(part.startswith(token + "=") for token in BANNED_TOKENS):
             return False, f"{part} is refused in every mode."
+    if binary == "nmap" and any(part in NMAP_RAW_FLAGS for part in argv[1:]):
+        if mode_rank(mode) < mode_rank("active-test"):
+            flagged = next(part for part in argv[1:] if part in NMAP_RAW_FLAGS)
+            return False, f"nmap {flagged} requires active-test mode and an attestation."
     if not tool_allowed(binary, mode):
         return False, f"{binary} requires {tool_mode(binary)} mode."
     return True, "Argument list is within the locked set."

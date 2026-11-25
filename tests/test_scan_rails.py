@@ -94,6 +94,10 @@ def test_passive_plan_omits_intrusive_tools_and_banned_flags_never_pass():
     assert not sudo
     syn, _ = argv_is_safe(["nmap", "-sS", "example.com"], "soft-active")
     assert not syn
+    curl_ok, _ = argv_is_safe(["curl", "-sS", "https://example.com"], "soft-active")
+    assert curl_ok
+    nmap_ok, _ = argv_is_safe(["nmap", "-sS", "example.com"], "active-test")
+    assert nmap_ok
     scope = _scope()
     planned = plan_commands("active-test", "example.com", binaries={"sqlmap", "ffuf"})
     budget = ScanBudget(max_requests=1, max_seconds=30)
