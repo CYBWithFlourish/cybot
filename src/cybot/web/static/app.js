@@ -182,7 +182,7 @@ function shell() {
 function pageCopy() {
   const pages = {
     mission: ["Mission", "Set the scope, pick the provider, and start recon."],
-    findings: ["Findings", "Notes that share a type are grouped. Explain writes one short paragraph."],
+    findings: ["Findings", "Submission cards, Ask CYBOT, and Export report. Each note still needs a person to retest it."],
     report: ["Report", "Final status, the provider that answered, and the export."],
     terminal: ["Terminal", "Allowlisted commands only. Each host is checked before the process starts."],
     tools: ["Tools", "What this machine can run, and what CYBOT will not install."],
@@ -446,13 +446,20 @@ function submissionCard(group) {
 function renderChatMarkdown(text) {
   const source = esc(text || "");
   const pieces = source.split("```");
-  return pieces.map((part, index) => {
-    if (index % 2 === 1) {
-      const code = part.replace(/^\n/, "").replace(/\n$/, "");
-      return `<div class="md-code"><button type="button" class="btn" data-action="copy-code">Copy</button><pre class="log"><code>${code}</code></pre></div>`;
-    }
-    return renderChatText(part);
-  }).join("");
+  return pieces.map((part, index) => (index % 2 === 1 ? renderChatFence(part) : renderChatText(part))).join("");
+}
+
+function renderChatFence(part) {
+  const trimmed = part.replace(/^\n/, "").replace(/\n$/, "");
+  const lines = trimmed.split("\n");
+  let label = "";
+  let code = trimmed;
+  if (lines.length > 1 && /^[A-Za-z0-9_+#.-]{1,24}$/.test(lines[0])) {
+    label = lines[0];
+    code = lines.slice(1).join("\n");
+  }
+  const badge = label ? `<span class="fence-label">${label}</span>` : "";
+  return `<div class="md-code">${badge}<button type="button" class="btn" data-action="copy-code">Copy</button><pre class="log"><code>${code}</code></pre></div>`;
 }
 
 function renderChatText(escaped) {
@@ -465,6 +472,7 @@ function renderChatText(escaped) {
     items = "";
   };
   const inline = (value) => value
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" rel="noopener noreferrer" target="_blank">$1</a>')
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
     .replace(/`([^`]+)`/g, "<code>$1</code>");
   for (const line of lines) {
