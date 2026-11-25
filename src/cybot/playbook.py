@@ -112,6 +112,13 @@ TOPICS = {
         "hacktricks": "https://book.hacktricks.wiki/en/network-services-pentesting/pentesting-web/pentesting-web-checklist.html",
         "nuclei": "http/exposures",
     },
+    "sqli": {
+        "cwe": 89,
+        "owasp": "https://owasp.org/www-project-web-security-testing-guide/stable/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05-Testing_for_SQL_Injection",
+        "portswigger": "https://portswigger.net/web-security/sql-injection",
+        "hacktricks": "https://book.hacktricks.wiki/en/pentesting-web/sql-injection/index.html",
+        "nuclei": "http/vulnerabilities/generic/sql-injection",
+    },
     "generic": {
         "cwe": 200,
         "owasp": "https://owasp.org/www-project-web-security-testing-guide/stable/4-Web_Application_Security_Testing/01-Information_Gathering/01-Conduct_Search_Engine_Discovery_Reconnaissance_for_Information_Leakage",
@@ -126,8 +133,10 @@ def classify(finding: dict) -> str:
     blob = f"{finding.get('title') or ''} {finding.get('evidence') or ''} {finding.get('tool') or ''}".lower()
     if _CVE.search(blob) or finding.get("tool") == "nvd_cves":
         return "cve"
-    if any(word in blob for word in ("xss", "cross-site scripting", "cross site scripting")):
+    if any(word in blob for word in ("xss", "cross-site scripting", "cross site scripting", "reflected parameter", "reflected xss")):
         return "xss"
+    if any(word in blob for word in ("sqli", "sql injection", "boolean lookup", "boolean sql")):
+        return "sqli"
     if "ssrf" in blob or "server-side request" in blob:
         return "ssrf"
     if "idor" in blob or "direct object" in blob:
@@ -209,9 +218,57 @@ def reference_links(finding: dict, kind: str | None = None) -> list[dict]:
     return links
 
 
-def _commands(kind: str, host: str) -> list[str]:
-    host = safe_host(host)
-    base = f"https://{host}"
+def asset_origin(finding: dict) -> str:
+    """Scheme, host, and port from the saved repro. Local demo stays http://127.0.0.1:8765."""
+    repro = str(finding.get("repro") or "")
+    found = re.search(r"https?://[^/\s'\"]+", repro)
+    if found:
+        return found.group(0).rstrip("/")
+    host = safe_host(str(finding.get("host") or ""))
+    if host in {"127.0.0.1", "localhost"}:
+        return f"http://{host}:8765"
+    return f"https://{host}"
+
+
+def align_playbook(finding: dict, book: dict | None = None) -> dict:
+    """Use the vuln class and the finding's real origin. Do not rewrite http to https."""
+    kind = classify(finding)
+    base = dict(book or template_playbook(finding, kind))
+    origin = asset_origin(finding)
+    host = safe_host(str(finding.get("host") or ""))
+    wrong = f"https://{host}"
+
+    def fix(value: str) -> str:
+        text = str(value)
+        if origin and wrong and origin != wrong:
+            text = text.replace(wrong, origin)
+        return text
+
+    verify = [fix(item) for item in (base.get("verify") or [])]
+    if host in {"127.0.0.1", "localhost"} and origin not in " ".join(verify):
+        verify = _commands(kind, finding)
+    number = (TOPICS.get(kind) or TOPICS["generic"])["cwe"]
+    refs = []
+    seen = set()
+    for item in base.get("references") or []:
+        label = str(item.get("label") or "")
+        url = str(item.get("url") or "")
+        if label.upper().startswith("CWE-") or not url or url in seen:
+            continue
+        seen.add(url)
+        refs.append({"label": label, "url": url})
+    cwe_url = f"https://cwe.mitre.org/data/definitions/{number}.html"
+    refs.insert(0, {"label": f"CWE-{number}", "url": cwe_url})
+    base["class"] = kind
+    base["verify"] = verify
+    base["references"] = refs
+    return base
+
+
+def _commands(kind: str, finding) -> list[str]:
+    if isinstance(finding, str):
+        finding = {"host": finding}
+    base = asset_origin(finding)
     topic = TOPICS.get(kind) or TOPICS["generic"]
     common = [
         f'curl -fsSI --max-time 15 "{base}/"',
@@ -273,7 +330,7 @@ def template_playbook(finding: dict, kind: str | None = None) -> dict:
         "why": why,
         "likelihood": likelihood,
         "impact": impact,
-        "verify": _commands(kind, host),
+        "verify": _commands(kind, finding),
         "evidence": [
             "Save the command, the full response headers, and the time.",
             "Record the in-scope host and the program rule that allowed it.",

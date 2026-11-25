@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import re
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -393,7 +394,14 @@ def create_app(config: Config | None = None, connector_fetch=None) -> FastAPI:
             text = service.report_markdown(run_id)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return PlainTextResponse(text, media_type="text/markdown; charset=utf-8")
+        run = store.get_run(run_id) or {}
+        host = re.sub(r"[^A-Za-z0-9._-]+", "-", str(run.get("target") or "run")).strip("-")[:80] or "run"
+        filename = f"cybot-{host}-{run_id}.md"
+        return PlainTextResponse(
+            text,
+            media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
     @app.get("/api/runs/{run_id}/report.pdf")
     def report_pdf(run_id: str, request: Request):

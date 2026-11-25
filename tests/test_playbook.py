@@ -53,14 +53,18 @@ def test_template_fallback_when_the_model_fails():
 def test_report_includes_the_playbook_for_the_demo_cve(client):
     started = client.post("/api/runs", headers=HEADERS, json=DEMO)
     assert started.status_code == 200, started.text
-    report = client.get(f"/api/runs/{started.json()['id']}/report.md", headers=HEADERS).text
-    assert "Research playbook" in report
-    assert "https://nvd.nist.gov/vuln/detail/CVE-2026-0001" in report
-    assert "never runs exploits" in report
-    assert "## Target notes" in report
+    report = client.get(f"/api/runs/{started.json()['id']}/report.md", headers=HEADERS)
+    assert "attachment" in report.headers.get("content-disposition", "")
+    text = report.text
+    assert "https://nvd.nist.gov/vuln/detail/CVE-2026-0001" in text
+    assert "never runs exploits" in text
+    assert "### Steps to reproduce" in text
+    assert "No audit rows" not in text
     findings = client.get(f"/api/runs/{started.json()['id']}/findings", headers=HEADERS).json()["findings"]
     cve = next(row for row in findings if "CVE-2026-0001" in row["title"])
-    assert cve["playbook"]["references"][0]["url"].endswith("CVE-2026-0001")
+    urls = [item["url"] for item in cve["playbook"]["references"]]
+    assert any(url.endswith("CVE-2026-0001") for url in urls)
+    assert "https://cwe.mitre.org/data/definitions/1395.html" in urls
     rendered = render_markdown(
         {"program": "CYBOT demo", "target": "www.example.com", "status": "complete", "playbook": json.dumps({"surface": "notes", "stack": ["nginx"], "services": [], "endpoints": [], "scope": {}})},
         [{**CVE, "playbook": json.dumps(template_playbook(CVE))}],

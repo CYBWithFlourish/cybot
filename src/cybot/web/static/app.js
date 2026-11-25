@@ -345,8 +345,9 @@ function trackRun(run) {
 }
 
 function runLabel(run) {
-  const when = String(run.created_at || "").replace("T", " ").slice(0, 16);
-  return `${when} ${run.target || "run"} (${pickerStatus(run.status)})`;
+  let host = String(run.target || "run");
+  if (host.length > 28) host = `${host.slice(0, 27)}...`;
+  return `${host} - ${pickerStatus(run.status)}`;
 }
 
 function pickerStatus(status) {
@@ -379,8 +380,11 @@ function findingsView() {
   if (!groups.length) {
     return `${history}${targetNotes()}${prompt}<section class="card"><h2>Findings</h2><p class="empty">No findings yet. A refused target is written to the authorization log, not listed here.</p></section>`;
   }
+  const exportName = state.run
+    ? `cybot-${String(state.run.target || "run").replace(/[^A-Za-z0-9._-]+/g, "-")}-${state.run.id}.md`
+    : "cybot-report.md";
   const exportLink = state.run
-    ? `<a class="btn" href="/api/runs/${esc(state.run.id)}/report.md">Export report</a>`
+    ? `<a class="btn" href="/api/runs/${esc(state.run.id)}/report.md" download="${esc(exportName)}">Export report</a>`
     : "";
   const cards = groups.map((group) => `
     <article class="finding" data-testid="finding-card">
@@ -391,7 +395,6 @@ function findingsView() {
       ${group.explained ? `<p class="plain" id="plain-${esc(group.id)}">${esc(group.plain)}</p>` : `<p class="plain muted" id="plain-${esc(group.id)}"></p>`}
       ${playbookDetails(group.playbook)}
       ${askPanel(group)}
-      <button class="btn" type="button" data-action="explain" data-id="${esc(group.id)}" data-testid="explain">Explain</button>
     </article>`).join("");
   return `${history}${prompt}<section class="card" data-testid="findings"><h2>Findings</h2><p class="help">Each card is a draft for a person to retest. Export report downloads the run as Markdown.</p><div class="row">${exportLink}</div>${cards}</section>`;
 }
@@ -421,10 +424,10 @@ function targetNotes() {
 
 function submissionCard(group) {
   const book = group.playbook || {};
-  const weakness = (book.references || []).map((item) => item.label).find((label) => String(label).startsWith("CWE-")) || "Not classified";
+  const byClass = { xss: "CWE-79", sqli: "CWE-89", headers: "CWE-693", cve: "CWE-1395" };
+  const weakness = (book.references || []).map((item) => item.label).find((label) => String(label).startsWith("CWE-")) || byClass[book.class] || "Not classified";
   const impact = book.impact || "Unverified until a person retests it.";
   const human = group.needsHuman === false ? "no" : "yes";
-  const chat = (group.chat || []).map((row) => `<p class="evidence"><strong>${esc(row.role)}</strong> ${esc(row.body)}</p>`).join("");
   return `
     <details class="playbook" open>
       <summary>Submission card</summary>
@@ -437,11 +440,62 @@ function submissionCard(group) {
       ${group.evidence ? `<p><strong>Evidence.</strong> ${esc(group.evidence)}</p>` : ""}
       <p><strong>Validation.</strong> Confidence ${esc(group.confidence || "n/a")}. Needs human validation: ${human}.</p>
       <button class="btn" type="button" data-action="copy-card" data-id="${esc(group.id)}" data-testid="copy-card">Copy as Markdown</button>
-    </details>
-    <div class="chat-log" id="chat-${esc(group.id)}">${chat}</div>`;
+    </details>`;
+}
+
+function renderChatMarkdown(text) {
+  const source = esc(text || "");
+  const pieces = source.split("```");
+  return pieces.map((part, index) => {
+    if (index % 2 === 1) {
+      const code = part.replace(/^\n/, "").replace(/\n$/, "");
+      return `<div class="md-code"><button type="button" class="btn" data-action="copy-code">Copy</button><pre class="log"><code>${code}</code></pre></div>`;
+    }
+    return renderChatText(part);
+  }).join("");
+}
+
+function renderChatText(escaped) {
+  const lines = escaped.split("\n");
+  let html = "";
+  let items = "";
+  const flush = () => {
+    if (!items) return;
+    html += `<ul>${items}</ul>`;
+    items = "";
+  };
+  const inline = (value) => value
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>");
+  for (const line of lines) {
+    const heading = /^(#{1,3}) (.+)$/.exec(line);
+    const item = /^(?:[-*]|\d+\.) (.+)$/.exec(line);
+    if (heading) {
+      flush();
+      const level = heading[1].length + 2;
+      html += `<h${level}>${inline(heading[2])}</h${level}>`;
+    } else if (item) {
+      items += `<li>${inline(item[1])}</li>`;
+    } else if (!line.trim()) {
+      flush();
+    } else {
+      flush();
+      html += `<p>${inline(line)}</p>`;
+    }
+  }
+  flush();
+  return html;
+}
+
+function chatLog(group) {
+  return (group.chat || []).map((row) => {
+    const body = row.role === "assistant" ? renderChatMarkdown(row.body) : `<p>${esc(row.body)}</p>`;
+    return `<div class="chat-line"><p class="evidence">${esc(row.role)}</p>${body}</div>`;
+  }).join("");
 }
 
 function askPanel(group) {
+  const open = state.openAsk === group.id ? "open" : "";
   const chips = [
     ["explain", "Explain"],
     ["impact", "Impact"],
@@ -452,7 +506,7 @@ function askPanel(group) {
     `<button class="btn" type="button" data-action="assist" data-assist="${action}" data-id="${esc(group.id)}">${label}</button>`
   ).join("");
   return `
-    <details class="playbook" data-testid="ask-cybot">
+    <details class="playbook" ${open} data-testid="ask-cybot">
       <summary>Ask CYBOT</summary>
       <p class="help">Guidance for a person to retest this in-scope asset. Not an exploit.</p>
       <div class="row">${chips}</div>
@@ -461,6 +515,7 @@ function askPanel(group) {
       <div class="row">
         <button class="btn primary" type="button" data-action="assist" data-assist="ask" data-id="${esc(group.id)}">Send</button>
       </div>
+      <div class="chat-log" id="chat-${esc(group.id)}">${chatLog(group)}</div>
     </details>`;
 }
 
@@ -570,7 +625,7 @@ function reportView() {
   const id = state.run && state.run.id;
   const links = id
     ? `<div class="row">
-        <a class="btn" href="/api/runs/${esc(id)}/report.md">Download Markdown</a>
+        <a class="btn" href="/api/runs/${esc(id)}/report.md" download="cybot-${esc(String((state.run && state.run.target) || "run").replace(/[^A-Za-z0-9._-]+/g, "-"))}-${esc(id)}.md">Download Markdown</a>
         <a class="btn" href="/api/runs/${esc(id)}/report.pdf">Download PDF</a>
       </div>`
     : "";
@@ -1115,6 +1170,22 @@ document.body.addEventListener("click", async (event) => {
     }
     return;
   }
+  if (action === "copy-code") {
+    const panel = button.closest("[data-testid='ask-cybot']");
+    const owner = panel && panel.querySelector("[data-assist]");
+    if (owner) state.openAsk = owner.dataset.id;
+    const code = button.parentElement && button.parentElement.querySelector("code");
+    try {
+      if (code && navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(code.textContent || "");
+      }
+      state.banner = { kind: "ok", text: "Copied the code block." };
+    } catch (error) {
+      state.banner = { kind: "bad", text: error.message };
+    }
+    render();
+    return;
+  }
   if (action === "copy-card") {
     try {
       const response = await fetch(`/api/findings/${button.dataset.id}/markdown`);
@@ -1137,6 +1208,7 @@ document.body.addEventListener("click", async (event) => {
         method: "POST",
         body: JSON.stringify({ action: button.dataset.assist || "ask", message: box ? box.value : "" }),
       });
+      state.openAsk = button.dataset.id;
       const row = state.findings.find((item) => item.id === button.dataset.id);
       if (row) row.chat = result.history || [];
       if (box) box.value = "";

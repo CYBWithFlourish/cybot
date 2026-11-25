@@ -18,7 +18,9 @@ def finding_card_markdown(finding: dict) -> str:
     """HackerOne and Bugcrowd style note. Evidence is redacted. Not a confirmed issue."""
     from cybot.playbook import classify, cwe_numbers, loads_playbook
 
-    book = loads_playbook(finding.get("playbook")) or {}
+    from cybot.playbook import align_playbook
+
+    book = align_playbook(finding, loads_playbook(finding.get("playbook")))
     host = finding.get("host") or ""
     title = finding.get("title") or "Finding"
     severity = finding.get("severity") or "info"
@@ -120,14 +122,13 @@ def _fix_line(kind: str, host: str) -> str:
 
 
 def render_markdown(run: dict, findings: list[dict], audit: list[dict]) -> str:
-    from cybot.playbook import loads_playbook, render_playbook_markdown, render_target_markdown
-
     findings = sort_findings(findings)
     lines = [
         "# CYBOT recon report",
         "",
         f"- Program: {run.get('program', '')}",
         f"- Target: {run.get('target', '')}",
+        f"- Mode: {run.get('mode') or run.get('intensity', '')}",
         f"- Intensity: {run.get('intensity', '')}",
         f"- Provider: {run.get('provider', '')}",
         f"- Model: {run.get('model') or 'none'}",
@@ -142,20 +143,29 @@ def render_markdown(run: dict, findings: list[dict], audit: list[dict]) -> str:
         "Only test in-scope assets with authorization. No auto-exploitation - CYBOT only suggests, never runs exploits.",
         "",
     ]
-    lines.extend(render_target_markdown(loads_playbook(run.get("playbook")) or {}))
+    counts = {"high": 0, "medium": 0, "low": 0, "info": 0}
+    for finding in findings:
+        level = str(finding.get("severity") or "info")
+        if level in counts:
+            counts[level] += 1
+    lines.extend(
+        [
+            f"- High: {counts['high']}",
+            f"- Medium: {counts['medium']}",
+            f"- Low: {counts['low']}",
+            f"- Info: {counts['info']}",
+            "",
+        ]
+    )
     lines.extend(["## Findings", ""])
     if not findings:
         lines.append("No findings were recorded.")
         lines.append("")
     for finding in findings:
         lines.append(finding_card_markdown(finding))
-        book = loads_playbook(finding.get("playbook"))
-        if book:
-            lines.extend(render_playbook_markdown(book))
-    lines.extend(["## Authorization log", ""])
-    related = [row for row in audit if row.get("run_id") in {run.get("id"), None}]
-    if not related:
-        lines.append("No audit rows were attached to this run.")
+    related = [row for row in audit if row.get("run_id") == run.get("id")]
+    if related:
+        lines.extend(["## Authorization log", ""])
     for row in related[:30]:
         lines.append(
             f"- {row['ts']} {row['decision']} {row['target']}: {row['detail']}"

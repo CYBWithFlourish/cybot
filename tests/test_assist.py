@@ -112,8 +112,62 @@ def test_assist_endpoint_uses_model_then_falls_back(client):
 def test_service_assist_persists_when_the_provider_is_mock(cfg):
     store = Store(cfg.data_dir / "cybot.db", load_fernet(cfg.data_dir, None))
     service = Service(cfg, store)
-    created = asyncio.run(service.start_run({**DEMO, "provider": "mock"}, "test"))
-    finding_id = store.findings(created["id"])[0]["id"]
-    result = asyncio.run(service.assist(finding_id, "fix", ""))
+    store.create_run(
+        id="run-seed",
+        created_at="2026-11-25T00:00:00+00:00",
+        target="www.example.com",
+        program="Example",
+        intensity="passive",
+        status="complete",
+        provider="mock",
+        model="",
+        scope_json="{}",
+        source="test",
+        notion="no",
+    )
+    store.add_finding(
+        id="finding-seed",
+        run_id="run-seed",
+        host="www.example.com",
+        tool="header_hygiene",
+        severity="info",
+        title="Missing header",
+        evidence="no HSTS",
+        plain="A reconnaissance note.",
+        created_at="2026-11-25T00:00:00+00:00",
+        jev="",
+    )
+    result = asyncio.run(service.assist("finding-seed", "fix", ""))
     assert result["source"] == "template"
-    assert store.chat(finding_id)[-1]["role"] == "assistant"
+    assert store.chat("finding-seed")[-1]["role"] == "assistant"
+
+
+def test_local_demo_cards_keep_http_port_and_cwe():
+    reflected = {
+        "title": "Reflected parameter on the local demo",
+        "severity": "info",
+        "host": "127.0.0.1",
+        "tool": "local-demo",
+        "plain": "The parameter came back.",
+        "evidence": "marker reflected",
+        "repro": "curl -sS 'http://127.0.0.1:8765/reflect?q=cybot'",
+        "confidence": "0.72",
+        "needs_human": 1,
+    }
+    reflected["playbook"] = template_playbook(reflected)
+    text = finding_card_markdown(reflected)
+    assert "CWE-79" in text
+    assert "http://127.0.0.1:8765" in text
+    assert "https://127.0.0.1" not in text
+    boolean = {
+        "title": "Boolean lookup difference on the local demo",
+        "severity": "info",
+        "host": "127.0.0.1",
+        "tool": "local-demo",
+        "plain": "The two responses differed.",
+        "evidence": "boolean difference",
+        "repro": "curl -sS 'http://127.0.0.1:8765/lookup?name=widget'",
+        "needs_human": 1,
+    }
+    boolean["playbook"] = template_playbook(boolean)
+    assert "CWE-89" in finding_card_markdown(boolean)

@@ -35,8 +35,10 @@ def test_demo_run_refuses_out_of_scope_names_and_writes_a_report(client):
     assert "evil.not-example.test" not in hosts
     blob = " ".join(row["evidence"] + row["title"] + row["plain"] for row in findings).lower()
     assert "exploit" not in blob or "not" in blob
-    report = client.get(f"/api/runs/{body['id']}/report.md", headers=HEADERS).text
-    assert "not confirmed" in report.lower() or "not a confirmed" in report.lower()
+    report = client.get(f"/api/runs/{body['id']}/report.md", headers=HEADERS)
+    assert "attachment" in report.headers.get("content-disposition", "")
+    assert body["id"] in report.headers.get("content-disposition", "")
+    assert "not confirmed" in report.text.lower() or "not a confirmed" in report.text.lower()
     pdf = client.get(f"/api/runs/{body['id']}/report.pdf", headers=HEADERS)
     assert pdf.content.startswith(b"%PDF")
     audit = client.get("/api/audit", headers=HEADERS).json()["audit"]

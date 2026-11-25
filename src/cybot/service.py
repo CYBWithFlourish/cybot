@@ -34,7 +34,7 @@ from cybot.llm import (
 )
 from cybot.mcp_client import call_tool, discover, load_servers
 from cybot.net import FixtureNet, RealNet
-from cybot.playbook import loads_playbook, short_summary, template_playbook
+from cybot.playbook import align_playbook, loads_playbook, short_summary, template_playbook
 from cybot.policy import select_builtin
 from cybot.report import sort_findings
 from cybot.scope import ScopeError, check_scope, normalize_host, parse_scope
@@ -496,7 +496,7 @@ class Service:
                     "evidence": row["evidence"],
                     "plain": row["plain"],
                     "jev": row.get("jev") or "",
-                    "playbook": loads_playbook(row.get("playbook")) or template_playbook(row),
+                    "playbook": align_playbook(row, loads_playbook(row.get("playbook")) or template_playbook(row)),
                     "confidence": row.get("confidence") or "",
                     "repro": row.get("repro") or "",
                     "needs_human_validation": bool(row.get("needs_human", 1)),
@@ -510,7 +510,7 @@ class Service:
         if not finding:
             raise ValueError("Unknown finding.")
         run = self.store.get_run(finding["run_id"])
-        book = loads_playbook(finding.get("playbook")) or template_playbook(finding)
+        book = align_playbook(finding, loads_playbook(finding.get("playbook")) or template_playbook(finding))
         return {
             "finding_id": finding_id,
             "run_id": finding["run_id"],
@@ -596,7 +596,7 @@ class Service:
         if not finding:
             raise ValueError("Unknown finding.")
         finding = dict(finding)
-        finding["playbook"] = loads_playbook(finding.get("playbook")) or template_playbook(finding)
+        finding["playbook"] = align_playbook(finding, loads_playbook(finding.get("playbook")) or template_playbook(finding))
         finding["needs_human_validation"] = bool(finding.get("needs_human", 1))
         return finding_card_markdown(finding)
 
@@ -649,10 +649,19 @@ class Service:
         return Gateway(connectors)
 
     def report_markdown(self, run_id: str) -> str:
-        report = self.store.get_report(run_id)
-        if report is None:
+        from cybot.report import render_markdown
+
+        run = self.store.get_run(run_id)
+        if not run or run.get("status") == "running":
             raise ValueError("Report is not ready.")
-        return report
+        findings = []
+        for row in self.store.findings(run_id):
+            item = dict(row)
+            item["playbook"] = align_playbook(item, loads_playbook(row.get("playbook")) or template_playbook(item))
+            item["needs_human_validation"] = bool(item.get("needs_human", 1))
+            findings.append(item)
+        audit = [row for row in self.store.recent_audit(200) if row.get("run_id") == run_id]
+        return render_markdown(run, findings, audit)
 
     def tool_catalog(self, roles: set[str] | None = None) -> list[dict]:
         secrets = set(self.store.secret_names())
