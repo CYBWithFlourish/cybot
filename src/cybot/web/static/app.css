@@ -274,8 +274,37 @@ details.playbook summary {
 details.playbook code { font-family: var(--mono); font-size: 13px; word-break: break-word; }
 
 @media (max-width: 959px) {
-  .workspace { padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
-  .layout { padding-bottom: var(--space-5); }
+  /* The nav sits under the scrolling page, not on top of it. */
+  html, body {
+    height: 100%;
+    overflow: hidden;
+  }
+  body { min-height: 100dvh; }
+  .shell {
+    height: 100dvh;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+  }
+  .rail { display: contents; }
+  .brand {
+    order: 1;
+    flex: 0 0 auto;
+  }
+  .workspace {
+    order: 2;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    padding-bottom: calc(var(--space-4) + env(safe-area-inset-bottom));
+  }
+  .nav {
+    order: 3;
+    position: static;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+  }
+  .layout { padding-bottom: var(--space-4); }
 }
 
 @media (max-width: 720px) {
@@ -294,7 +323,8 @@ details.playbook code { font-family: var(--mono); font-size: 13px; word-break: b
 }
 
 @media (min-width: 960px) {
-  .shell { display: grid; grid-template-columns: 232px minmax(0, 1fr); }
+  html, body { height: auto; overflow: auto; }
+  .shell { display: grid; grid-template-columns: 232px minmax(0, 1fr); height: auto; min-height: 100vh; }
   .rail {
     position: sticky;
     top: 0;
