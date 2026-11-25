@@ -1,0 +1,15 @@
+.venv/
+venv/
+data/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.env
+*.key
+.DS_Store
+.agents/
+.playwright-mcp/
+skills-lock.json
