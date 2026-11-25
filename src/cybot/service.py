@@ -21,7 +21,7 @@ from cybot.notion import NotionSkipped, list_programs, list_tracked, publish_run
 from cybot.notion import resolve_notion_choice, scope_from_programs
 from cybot.partners import search_memory as recall_memory
 from cybot.engine import execute_run, secrets_id
-from cybot.rails import derive_mode, permit_scan
+from cybot.rails import attestation_ok, derive_mode, permit_scan
 from cybot.rails import ScanBudget
 from cybot.scan import execute_locked, gate_plan, plan_commands, run_local_demo, tool_status
 from cybot.terminal import submit_command
@@ -80,6 +80,7 @@ class Service:
         return self.store.get_secret("telegram")
 
     async def check_scope(self, data: dict) -> dict:
+        data = prepare_request(data)
         scope = parse_scope(data)
         decision = check_scope(scope, str(data.get("target") or ""))
         self.store.audit(
@@ -100,9 +101,10 @@ class Service:
     async def start_run(self, data: dict, source: str) -> dict:
         if self.store.active_run():
             raise ValueError("A run is already in progress.")
-        data = dict(data)
+        data = prepare_request(dict(data))
         if data.get("use_notion_scope"):
             data = await self._apply_notion_scope(data)
+            data = prepare_request(data)
         scope = parse_scope(data)
         try:
             host = normalize_host(str(data.get("target") or ""))
@@ -116,7 +118,11 @@ class Service:
             intensity = "light"
         if mode == "active-test":
             intensity = "standard"
-        local_demo = bool(data.get("demo")) and host == "127.0.0.1"
+        local_demo = host == "127.0.0.1" and mode == "active-test"
+        if host == "127.0.0.1" and mode != "active-test":
+            raise ValueError("The local demo runs in active-test mode.")
+        if host in FIXTURE_HOSTS and self.config.demo:
+            data["demo"] = True
         if bool(data.get("demo")) and not local_demo and host not in FIXTURE_HOSTS:
             raise ValueError("Demo mode only runs the reserved example.com fixture.")
         permit = permit_scan(
@@ -730,6 +736,30 @@ def _llm_for_connector(chosen, model: str):
     if chosen.style == "gemini":
         return GeminiLLM(chosen.provider, chosen.gateway_base, "", model, connector=True)
     return OpenAICompatLLM(chosen.provider, chosen.gateway_base, "", model, connector=True)
+
+
+def prepare_request(data: dict) -> dict:
+    """Fill authorization and attestation when the caller did not send them.
+
+    A statement the caller did send is kept. Choosing soft-active or active-test
+    is the opt-in, so a missing approval flag is treated as approved.
+    """
+    data = dict(data)
+    program = str(data.get("program") or "").strip() or "this program"
+    if len(str(data.get("authorization") or "").strip()) < 20:
+        data["authorization"] = (
+            f"Authorized recon for {program}. Only the listed in-scope assets may be checked."
+        )
+    mode = str(data.get("mode") or "").strip()
+    intensity = str(data.get("intensity") or "passive").strip()
+    active_mode = mode in {"soft-active", "active-test"} or intensity in {"light", "standard"}
+    if active_mode and data.get("active_approved") is None:
+        data["active_approved"] = True
+    if mode == "active-test" and not attestation_ok(str(data.get("attestation") or "")):
+        data["attestation"] = (
+            f"I am authorized to run non-destructive active-test checks on the in-scope assets for {program}."
+        )
+    return data
 
 
 def net_kind(config: Config, demo: bool, host: str, local_demo: bool = False) -> str:

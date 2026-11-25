@@ -130,7 +130,7 @@ def check_scope(scope: Scope, target: str, *, allow_demo: bool = False) -> Decis
     return Decision(
         False,
         host,
-        f"{host} is not covered by an in-scope pattern. CYBOT will not contact it.",
+        f"{host} is outside this scope. CYBOT did not contact it.",
         "not-in-scope",
     )
 

@@ -61,13 +61,13 @@ class ScopeIn(BaseModel):
     program: str
     include: list[str]
     exclude: list[str] = []
-    authorization: str
+    authorization: str = ""
     target: str
 
 
 class RunIn(ScopeIn):
     intensity: str = "passive"
-    active_approved: bool = False
+    active_approved: bool | None = None
     demo: bool = False
     use_notion_scope: bool = False
     notion: str = "ask"

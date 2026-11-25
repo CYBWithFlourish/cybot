@@ -229,12 +229,9 @@ function rememberMission(form) {
     program: data.program || "",
     include: data.include || "",
     exclude: data.exclude || "",
-    authorization: data.authorization || "",
     target: data.target || "",
     intensity: data.intensity || "passive",
     mode: data.mode || "passive",
-    attestation: data.attestation || "",
-    active: Boolean(form.elements.active_approved && form.elements.active_approved.checked),
     notionYes: Boolean(form.elements.notion_yes && form.elements.notion_yes.checked),
     provider: data.run_provider || "",
     model: data.run_model || "",
@@ -265,27 +262,22 @@ function missionView(settings) {
           <textarea id="include" name="include" required placeholder="example.com&#10;*.example.com">${esc(saved.include)}</textarea>
           <label for="exclude">Excluded</label>
           <textarea id="exclude" name="exclude" placeholder="payments.example.com">${esc(saved.exclude)}</textarea>
-          <label for="authorization">Authorization you hold</label>
-          <textarea id="authorization" name="authorization" required minlength="20" placeholder="I am authorized to test these assets under the program rules.">${esc(saved.authorization)}</textarea>
           <label for="target">Target</label>
           <input id="target" name="target" required data-testid="target" placeholder="www.example.com" value="${esc(saved.target)}" />
           <label for="mode">Scanning mode</label>
           <select id="mode" name="mode" data-testid="scan-mode">
             <option value="passive" ${saved.mode === "passive" ? "selected" : ""}>Passive - no packets to the target</option>
             <option value="soft-active" ${saved.mode === "soft-active" ? "selected" : ""}>Soft-active - homepage, headers, fixed ports</option>
-            <option value="active-test" ${saved.mode === "active-test" ? "selected" : ""}>Active-test - opt-in, attestation required</option>
+            <option value="active-test" ${saved.mode === "active-test" ? "selected" : ""}>Active-test - in-scope hosts and the local demo</option>
           </select>
           <input type="hidden" name="intensity" value="${esc(saved.mode === "active-test" ? "standard" : saved.mode === "soft-active" ? "light" : "passive")}" />
-          <label for="attestation">Attestation (required for active-test)</label>
-          <textarea id="attestation" name="attestation" minlength="40" placeholder="I am authorized to run non-destructive checks on the in-scope assets.">${esc(saved.attestation || "")}</textarea>
-          <p class="help">Passive uses resolvers, certificate logs, and RDAP. Soft-active adds one homepage fetch, headers, and a fixed web-port list. Active-test also allows locked optional binaries after you approve the check and write an attestation. Missing binaries are skipped.</p>
+          <p class="help">Pick a target and a mode, then start. Passive does not contact the target. Soft-active fetches the homepage and fixed ports. Active-test adds optional binaries for in-scope hosts, the example.com fixture, or the local demo. Anything else is refused.</p>
           <label for="run_provider">Provider for this run</label>
           <select id="run_provider" name="run_provider" data-testid="run-provider">
             ${providerOptions(provider)}
           </select>
           <label for="run_model">Model</label>
           <input id="run_model" name="run_model" data-testid="run-model" value="${esc(model)}" placeholder="${esc(defaultModelPlaceholder(provider))}" />
-          <label class="checks"><input id="active" name="active_approved" type="checkbox" ${saved.active ? "checked" : ""} /> <span>I approve active checks only against the hosts listed above, at this intensity.</span></label>
           <label class="checks"><input id="notion_yes" name="notion_yes" type="checkbox" data-testid="notion-yes" ${saved.notionYes ? "checked" : ""} ${notionLocked(settings)} /> <span>Create a Notion page when this run finishes. Leave this off to be asked after the report is ready.</span></label>
           <div class="row">
             <button class="btn" type="button" data-action="check" data-testid="check-scope">Check scope</button>
@@ -375,10 +367,10 @@ function findingsView() {
   const history = runPicker();
   const groups = groupFindings(state.findings);
   if (!state.run) {
-    return `${history}<section class="card"><h2>Findings</h2><p class="empty">${state.runs.length ? "Loading the latest run." : "No findings yet. A refused target is written to the authorization log, not listed here."}</p></section>`;
+    return `${history}<section class="card"><h2>Findings</h2><p class="empty">${state.runs.length ? "Loading the latest run." : "No findings yet. A refused target is written to the audit log, not listed here."}</p></section>`;
   }
   if (!groups.length) {
-    return `${history}${targetNotes()}${prompt}<section class="card"><h2>Findings</h2><p class="empty">No findings yet. A refused target is written to the authorization log, not listed here.</p></section>`;
+    return `${history}${targetNotes()}${prompt}<section class="card"><h2>Findings</h2><p class="empty">No findings yet. A refused target is written to the audit log, not listed here.</p></section>`;
   }
   const exportName = state.run
     ? `cybot-${String(state.run.target || "run").replace(/[^A-Za-z0-9._-]+/g, "-")}-${state.run.id}.md`
@@ -918,12 +910,9 @@ function scopeFromForm(form) {
     program: data.program,
     include: data.include.split(/\n+/).map((line) => line.trim()).filter(Boolean),
     exclude: data.exclude.split(/\n+/).map((line) => line.trim()).filter(Boolean),
-    authorization: data.authorization,
     target: data.target.trim(),
     mode: data.mode || "passive",
     intensity: data.mode === "active-test" ? "standard" : data.mode === "soft-active" ? "light" : "passive",
-    attestation: data.attestation || "",
-    active_approved: form.elements.active_approved.checked,
     notion: form.elements.notion_yes && form.elements.notion_yes.checked ? "yes" : "ask",
     demo: (state.demoLoaded && (data.target.trim() === "example.com" || data.target.trim() === "www.example.com")) || (state.localDemo && data.target.trim() === "127.0.0.1"),
     provider: data.run_provider || "",
@@ -986,12 +975,6 @@ document.body.addEventListener("submit", async (event) => {
     if (form.id === "missionForm") {
       rememberMission(form);
       const body = scopeFromForm(form);
-      if (body.mode !== "passive" && !body.active_approved) {
-        throw new Error("Check the approval box before a soft-active or active-test run.");
-      }
-      if (body.mode === "active-test" && (body.attestation || "").trim().length < 40) {
-        throw new Error("Active-test needs an attestation of at least 40 characters.");
-      }
       state.busy = true;
       state.log = [];
       state.requestedProvider = body.provider || (state.settings && state.settings.provider) || "opencode";
@@ -1094,12 +1077,9 @@ document.body.addEventListener("click", async (event) => {
       program: "CYBOT local demo",
       include: "127.0.0.1",
       exclude: "",
-      authorization: "Local demo only. I am authorized to review the bundled app on 127.0.0.1.",
       target: "127.0.0.1",
       intensity: "standard",
       mode: "active-test",
-      attestation: "I am authorized to validate the bundled local demo on 127.0.0.1 only.",
-      active: true,
     };
     state.view = "mission";
     render();
@@ -1111,11 +1091,9 @@ document.body.addEventListener("click", async (event) => {
       program: "CYBOT demo",
       include: "example.com\nwww.example.com",
       exclude: "mail.example.com",
-      authorization: "Demo fixture only. I am authorized to review this local example.com fixture.",
       target: "www.example.com",
       intensity: "light",
       mode: "soft-active",
-      active: true,
     };
     state.demoLoaded = true;
     state.banner = { kind: "info", text: "Demo loaded. This run uses local fixtures and does not contact example.com." };

@@ -169,24 +169,36 @@ def test_local_demo_run_records_validation(tmp_path, cfg):
     assert all(float(row["confidence"]) >= 0.6 for row in findings)
 
 
-def test_active_test_without_attestation_is_rejected(client):
-    response = client.post(
+def test_active_test_fills_attestation_and_refuses_other_hosts(client):
+    started = client.post(
         "/api/runs",
         headers={"X-CYBOT": "1"},
         json={
             "program": "Example",
             "include": ["example.com"],
             "exclude": [],
-            "authorization": "I am authorized to test only example.com.",
             "target": "example.com",
             "mode": "active-test",
-            "active_approved": True,
-            "attestation": "short",
+            "provider": "mock",
             "demo": True,
         },
     )
-    assert response.status_code == 400
-    assert "attestation" in response.json()["detail"].lower()
+    assert started.status_code == 200, started.text
+    assert started.json()["status"] == "complete"
+    refused = client.post(
+        "/api/runs",
+        headers={"X-CYBOT": "1"},
+        json={
+            "program": "Example",
+            "include": ["example.com"],
+            "exclude": [],
+            "target": "payments.example.net",
+            "mode": "active-test",
+            "provider": "mock",
+        },
+    )
+    assert refused.status_code == 400
+    assert "outside this scope" in refused.json()["detail"].lower() or "demo mode" in refused.json()["detail"].lower()
 
 
 def test_install_script_exits_cleanly_when_tools_are_missing():

@@ -81,7 +81,7 @@ def test_scope_extraction_refuses_out_of_scope_and_private_addresses(tmp_path):
         workdir=tmp_path,
     )
     assert not outside["ok"]
-    assert "not covered" in outside["reason"]
+    assert "outside this scope" in outside["reason"]
     private = prepare_command("curl http://10.1.1.1/", SCOPE, mode="soft-active", workdir=tmp_path)
     assert not private["ok"]
     meta = prepare_command("curl http://169.254.169.254/", SCOPE, mode="active-test", workdir=tmp_path, attestation=ATTEST)

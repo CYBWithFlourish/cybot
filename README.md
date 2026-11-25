@@ -195,7 +195,7 @@ Exposed tools: `check_scope`, `start_recon`, `get_status`, `get_findings`, `expl
 
 `get_playbook` returns the research playbook for one finding id: why it matters, manual checks, evidence to capture, and reference links. Optional Notion tracker properties `Next steps`, `References`, `EPSS`, and `KEV` are filled when those columns exist.
 
-`start_recon` accepts `mode` (`passive`, `soft-active`, `active-test`) and `attestation`. Active-test is rejected without an attestation. Telegram cannot set that mode.
+`start_recon` accepts `mode` (`passive`, `soft-active`, `active-test`). `authorization` and `attestation` are optional. When they are omitted, CYBOT records a scope-limited statement for the named program. A caller that still sends them is honored. Out-of-scope hosts are refused. Telegram stays on passive runs.
 
 `start_recon` accepts `publish_to_notion` (boolean); omitting it leaves Notion unpublished until `publish_report_to_notion` is called explicitly.
 
@@ -216,13 +216,13 @@ When `TELEGRAM_BOT_TOKEN` (or vault `telegram`) is set, CYBOT long-polls the Tel
 
 ## Scanning modes and safety
 
-Every check goes through the same rails before a packet or a binary is used: scope, rate limit, request budget, opt-in approval, and (for active-test) a written attestation. A missing binary is skipped. CYBOT records a confidence score, a curl command a person can retest, and `needs_human_validation`. It does not confirm a vulnerability.
+Every check goes through the same rails before a packet or a binary is used: scope, rate limit, and request budget. Choosing a mode is the opt-in. CYBOT records the authorization statement itself when the caller does not send one. A missing binary is skipped. CYBOT records a confidence score, a curl command a person can retest, and `needs_human_validation`. It does not confirm a vulnerability.
 
 | Mode | What it may do | What it requires |
 | --- | --- | --- |
-| **passive** | Resolvers, certificate logs, RDAP, and optional `subfinder`, `dnsx`, `dig`, `whois`. No packets to the target. | A saved in-scope target. Telegram `/recon` and `/scan` stay here. |
-| **soft-active** | One homepage fetch, header notes, a fixed web-port connect (`80`, `443`, `8080`, `8443`), and optional `httpx`, `whatweb`, `wafw00f`, `naabu`, `nmap -sT`. | The approval checkbox. |
-| **active-test** | The soft-active set, plus optional `katana`, `nuclei` (info/low exposure tags only), `ffuf` and `gobuster` on a short public-path list, `dalfox` without a blind callback, and `sqlmap` boolean detection only. | The approval checkbox and an attestation of at least 40 characters that says you are authorized. |
+| **passive** | Resolvers, certificate logs, RDAP, and optional `subfinder`, `dnsx`, `dig`, `whois`. No packets to the target. | An in-scope target. Telegram `/recon` and `/scan` stay here. |
+| **soft-active** | One homepage fetch, header notes, a fixed web-port connect (`80`, `443`, `8080`, `8443`), and optional `httpx`, `whatweb`, `wafw00f`, `naabu`, `nmap -sT`. | The soft-active mode on an in-scope target. |
+| **active-test** | The soft-active set, plus optional `katana`, `nuclei` (info/low exposure tags only), `ffuf` and `gobuster` on a short public-path list, `dalfox` without a blind callback, and `sqlmap` boolean detection only. | An in-scope host, the example.com fixture, or the local demo on `127.0.0.1`. |
 
 Refused in every mode: `sudo`, raw SYN scans, NSE scripts, `sqlmap` dump or shell or file read, and any host outside the include list. Private, loopback, link-local, and metadata addresses are blocked. The only exception is the bundled demo app on `127.0.0.1`, and only when demo mode is on and the run is active-test.
 
@@ -232,7 +232,7 @@ Optional tools are installed with `sh scripts/install-scan-tools.sh`. The script
 
 ### Terminal
 
-The dashboard Terminal and the MCP tool `run_command` share one runner. The allowlist is `curl`, `httpx`, `gobuster`, `ffuf`, `dig`, `whois`, `nslookup`, `host`, `nmap`, `openssl`, `whatweb`, `wafw00f`, `jq`, `grep`, and `sed`. Every host, URL, and IP in the command is checked against the scope gate. Private and metadata addresses are refused, except the demo app on `127.0.0.1` during an active-test demo run. `sudo`, shell pipes, redirects, and writes outside the run directory are refused. Intrusive flags and `ffuf` / `gobuster` require active-test plus an attestation.
+The dashboard Terminal and the MCP tool `run_command` share one runner. The allowlist is `curl`, `httpx`, `gobuster`, `ffuf`, `dig`, `whois`, `nslookup`, `host`, `nmap`, `openssl`, `whatweb`, `wafw00f`, `jq`, `grep`, and `sed`. Every host, URL, and IP in the command is checked against the scope gate. Private and metadata addresses are refused, except the demo app on `127.0.0.1` during an active-test demo run. `sudo`, shell pipes, redirects, and writes outside the run directory are refused. Intrusive flags and `ffuf` / `gobuster` require active-test. Active-test commands still wait for confirmation in the terminal.
 
 Passive and soft-active commands run after the check. Active-test stays in confirm mode until you confirm. Each command has a timeout and an output cap, and it is written to the audit log. A suggest-and-check loop stops after 6 steps.
 

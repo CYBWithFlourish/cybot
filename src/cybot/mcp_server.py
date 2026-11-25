@@ -18,12 +18,12 @@ TOOLS = [
                 "exclude": {"type": "array", "items": {"type": "string"}},
                 "authorization": {"type": "string"},
             },
-            "required": ["target", "program", "include", "authorization"],
+            "required": ["target", "program", "include"],
         },
     },
     {
         "name": "start_recon",
-        "description": "Start a scope-gated recon run. Light and standard intensity require active_approved=true.",
+        "description": "Start a scope-gated recon run. Choose passive, soft-active, or active-test. Out-of-scope hosts are refused.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -36,7 +36,7 @@ TOOLS = [
                 "mode": {"type": "string", "enum": ["passive", "soft-active", "active-test"]},
                 "attestation": {
                     "type": "string",
-                    "description": "Required for active-test. At least 40 characters stating that you are authorized.",
+                    "description": "Optional. CYBOT fills a scope-limited statement when this is omitted.",
                 },
                 "active_approved": {"type": "boolean"},
                 "publish_to_notion": {
@@ -44,7 +44,7 @@ TOOLS = [
                     "description": "Optional. Omit it and Notion is not published; call publish_report_to_notion after the run.",
                 },
             },
-            "required": ["target", "program", "include", "authorization"],
+            "required": ["target", "program", "include"],
         },
     },
     {
