@@ -128,6 +128,18 @@ class Store:
             run_columns = {row[1] for row in self.conn.execute("PRAGMA table_info(runs)")}
             if "playbook" not in run_columns:
                 self.conn.execute("ALTER TABLE runs ADD COLUMN playbook TEXT NOT NULL DEFAULT ''")
+            run_columns = {row[1] for row in self.conn.execute("PRAGMA table_info(runs)")}
+            if "mode" not in run_columns:
+                self.conn.execute("ALTER TABLE runs ADD COLUMN mode TEXT NOT NULL DEFAULT 'passive'")
+            if "attestation" not in run_columns:
+                self.conn.execute("ALTER TABLE runs ADD COLUMN attestation TEXT NOT NULL DEFAULT ''")
+            finding_columns = {row[1] for row in self.conn.execute("PRAGMA table_info(findings)")}
+            if "confidence" not in finding_columns:
+                self.conn.execute("ALTER TABLE findings ADD COLUMN confidence TEXT NOT NULL DEFAULT ''")
+            if "repro" not in finding_columns:
+                self.conn.execute("ALTER TABLE findings ADD COLUMN repro TEXT NOT NULL DEFAULT ''")
+            if "needs_human" not in finding_columns:
+                self.conn.execute("ALTER TABLE findings ADD COLUMN needs_human INTEGER NOT NULL DEFAULT 1")
             self.conn.commit()
 
     def close(self) -> None:
@@ -225,11 +237,13 @@ class Store:
             self.conn.commit()
 
     def create_run(self, **fields) -> str:
+        fields.setdefault("mode", "passive")
+        fields.setdefault("attestation", "")
         with self._lock:
             self.conn.execute(
                 """
-                INSERT INTO runs(id, created_at, target, program, intensity, status, provider, model, error, scope_json, source, notion)
-                VALUES(:id, :created_at, :target, :program, :intensity, :status, :provider, :model, '', :scope_json, :source, :notion)
+                INSERT INTO runs(id, created_at, target, program, intensity, status, provider, model, error, scope_json, source, notion, mode, attestation)
+                VALUES(:id, :created_at, :target, :program, :intensity, :status, :provider, :model, '', :scope_json, :source, :notion, :mode, :attestation)
                 """,
                 fields,
             )
@@ -300,11 +314,14 @@ class Store:
         return [dict(row) for row in rows]
 
     def add_finding(self, **fields) -> None:
+        fields.setdefault("confidence", "")
+        fields.setdefault("repro", "")
+        fields.setdefault("needs_human", 1)
         with self._lock:
             self.conn.execute(
                 """
-                INSERT INTO findings(id, run_id, host, tool, severity, title, evidence, plain, created_at, jev)
-                VALUES(:id, :run_id, :host, :tool, :severity, :title, :evidence, :plain, :created_at, :jev)
+                INSERT INTO findings(id, run_id, host, tool, severity, title, evidence, plain, created_at, jev, confidence, repro, needs_human)
+                VALUES(:id, :run_id, :host, :tool, :severity, :title, :evidence, :plain, :created_at, :jev, :confidence, :repro, :needs_human)
                 """,
                 fields,
             )

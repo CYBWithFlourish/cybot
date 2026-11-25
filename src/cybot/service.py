@@ -21,6 +21,8 @@ from cybot.notion import NotionSkipped, list_programs, list_tracked, publish_run
 from cybot.notion import resolve_notion_choice, scope_from_programs
 from cybot.partners import search_memory as recall_memory
 from cybot.engine import execute_run, secrets_id
+from cybot.rails import derive_mode, permit_scan
+from cybot.scan import execute_locked, gate_plan, plan_commands, run_local_demo, tool_status
 from cybot.llm import (
     AnthropicLLM,
     GeminiLLM,
@@ -106,9 +108,27 @@ class Service:
         intensity = str(data.get("intensity") or "passive")
         if intensity not in {"passive", "light", "standard"}:
             raise ValueError("Intensity must be passive, light, or standard.")
-        if intensity != "passive" and not data.get("active_approved"):
+        mode = derive_mode(str(data.get("mode") or ""), intensity)
+        if mode == "soft-active" and intensity == "passive":
+            intensity = "light"
+        if mode == "active-test":
+            intensity = "standard"
+        local_demo = bool(data.get("demo")) and host == "127.0.0.1"
+        if bool(data.get("demo")) and not local_demo and host not in FIXTURE_HOSTS:
+            raise ValueError("Demo mode only runs the reserved example.com fixture.")
+        permit = permit_scan(
+            scope,
+            host,
+            mode=mode,
+            active_approved=bool(data.get("active_approved")),
+            attestation=str(data.get("attestation") or ""),
+            allow_demo=local_demo,
+        )
+        if not permit.allowed:
+            raise ValueError(permit.reason)
+        if mode != "passive" and not data.get("active_approved"):
             raise ValueError("Light and standard intensity need explicit active approval.")
-        kind = net_kind(self.config, bool(data.get("demo")), host)
+        kind = net_kind(self.config, bool(data.get("demo")), host, local_demo=local_demo)
         settings = self.store.settings()
         notion_choice, notion_note = resolve_notion_choice(
             settings.get("notion_publish") or "ask",
@@ -140,11 +160,20 @@ class Service:
             scope_json=scope_json,
             source=source,
             notion=notion_choice,
+            mode=mode,
+            attestation=str(data.get("attestation") or "")[:500],
         )
         if source == "dashboard":
             self.store.meta_set("scope", scope_json)
         self._run_choices[run_id] = (requested_provider, requested_model)
-        self.store.event(run_id, "ok", f"Run accepted from {source}.")
+        self.store.event(run_id, "ok", f"Run accepted from {source} in {mode} mode.")
+        if mode != "passive":
+            planned = plan_commands(mode, host)
+            self.store.event(
+                run_id,
+                "info",
+                f"Scan plan has {len(planned)} locked commands. Missing binaries are skipped.",
+            )
         if self.config.inline_runs:
             await self._go(run_id, kind)
         else:
@@ -157,6 +186,13 @@ class Service:
         return public
 
     async def _go(self, run_id: str, kind: str) -> None:
+        if kind == "local-demo":
+            try:
+                run_local_demo(self.store, run_id)
+            except Exception as exc:
+                self.store.finish_run(run_id, "error", str(exc)[:240])
+                self.store.event(run_id, "error", str(exc)[:240])
+            return
         requested_provider, requested_model = self._run_choices.pop(run_id, ("", ""))
         try:
             llm = await self.build_llm(
@@ -221,6 +257,8 @@ class Service:
             if finished and finished.get("notion") == "ask" and finished.get("source") == "telegram":
                 await send_notion_prompt(token, chat, finished["target"], run_id)
 
+        if kind == "real":
+            self._run_locked_binaries(run_id)
         await execute_run(
             store=self.store,
             net_factory=lambda: self.make_net(kind),
@@ -382,6 +420,31 @@ class Service:
             "detail": "The gateway accepted a harmless check.",
         }
 
+    def _run_locked_binaries(self, run_id: str) -> None:
+        import json
+
+        from cybot.rails import ScanBudget
+
+        run = self.store.get_run(run_id)
+        if not run or (run.get("mode") or "passive") == "passive":
+            return
+        scope = parse_scope(json.loads(run["scope_json"]))
+        commands = plan_commands(run["mode"], run["target"])
+        accepted, notes = gate_plan(
+            scope,
+            run["target"],
+            run["mode"],
+            commands,
+            active_approved=True,
+            attestation=run.get("attestation") or "",
+            budget=ScanBudget(max_requests=8, max_seconds=90),
+            allow_demo=False,
+        )
+        for note in notes:
+            self.store.event(run_id, "warn", note[:240])
+        for note in execute_locked(accepted, timeout=8):
+            self.store.event(run_id, "info", note[:240])
+
     def status(self, run_id: str) -> dict:
         run = self.store.get_run(run_id)
         if not run:
@@ -404,6 +467,9 @@ class Service:
                     "plain": row["plain"],
                     "jev": row.get("jev") or "",
                     "playbook": loads_playbook(row.get("playbook")) or template_playbook(row),
+                    "confidence": row.get("confidence") or "",
+                    "repro": row.get("repro") or "",
+                    "needs_human_validation": bool(row.get("needs_human", 1)),
                 }
             )
         return rows
@@ -524,6 +590,7 @@ class Service:
                     "reason": reason,
                 }
             )
+        rows.extend(tool_status())
         return rows
 
     def mcp_servers(self) -> list[dict]:
@@ -564,7 +631,11 @@ def _llm_for_connector(chosen, model: str):
     return OpenAICompatLLM(chosen.provider, chosen.gateway_base, "", model, connector=True)
 
 
-def net_kind(config: Config, demo: bool, host: str) -> str:
+def net_kind(config: Config, demo: bool, host: str, local_demo: bool = False) -> str:
+    if local_demo:
+        if not demo or not config.demo:
+            raise ValueError("Demo mode is off on this server.")
+        return "local-demo"
     if not demo:
         return "real"
     if not config.demo:
@@ -589,6 +660,7 @@ def _public_run(run: dict | None) -> dict:
         "error": run.get("error") or "",
         "source": run["source"],
         "notion": run.get("notion") or "ask",
+        "mode": run.get("mode") or "passive",
         "target_playbook": loads_playbook(run.get("playbook")),
     }
 

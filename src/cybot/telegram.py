@@ -11,10 +11,11 @@ from cybot.scope import ScopeError, normalize_host, parse_scope
 HELP = (
     "CYBOT on Telegram.\n"
     "/recon host - passive recon using the scope saved on the dashboard.\n"
+    "/scan host - same passive rail. Soft-active and active-test stay on the dashboard.\n"
     "/status - latest run.\n"
-    "/findings - short list.\n"
+    "/findings - short list. Each note still needs a person to retest it.\n"
     "/report - summary. The full Markdown and PDF are on the dashboard.\n"
-    "Active checks stay on the dashboard, where the approval checkbox is explicit."
+    "Active-test needs the dashboard attestation. Telegram cannot widen scope."
 )
 
 
@@ -34,7 +35,7 @@ async def handle_text(service, chat_id: str, text: str) -> str:
     service.store.meta_set("telegram_chat", str(chat_id))
     if command in {"/start", "/help"}:
         return HELP
-    if command == "/recon":
+    if command in {"/recon", "/scan"}:
         if argument in {"", "TOO_MANY"}:
             return "Usage: /recon host\nTelegram starts passive recon only."
         raw = service.store.meta_get("scope")
@@ -82,7 +83,10 @@ async def handle_text(service, chat_id: str, text: str) -> str:
         lines = []
         for row in findings[:5]:
             book = row.get("playbook") if isinstance(row.get("playbook"), dict) else loads_playbook(row.get("playbook"))
-            lines.append(f"{row['severity']}: {row['title']}")
+            flag = ""
+            if row.get("needs_human_validation", True):
+                flag = " (needs human validation)"
+            lines.append(f"{row['severity']}: {row['title']}{flag}")
             lines.append(short_summary(book)[:180])
         lines.append("Only test in-scope assets. CYBOT only suggests, never runs exploits.")
         return "\n".join(lines)

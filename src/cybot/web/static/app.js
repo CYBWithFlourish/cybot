@@ -211,6 +211,8 @@ function draft() {
     authorization: "",
     target: "",
     intensity: "passive",
+    mode: "passive",
+    attestation: "",
     active: false,
     provider: "",
     model: "",
@@ -227,6 +229,8 @@ function rememberMission(form) {
     authorization: data.authorization || "",
     target: data.target || "",
     intensity: data.intensity || "passive",
+    mode: data.mode || "passive",
+    attestation: data.attestation || "",
     active: Boolean(form.elements.active_approved && form.elements.active_approved.checked),
     notionYes: Boolean(form.elements.notion_yes && form.elements.notion_yes.checked),
     provider: data.run_provider || "",
@@ -239,7 +243,8 @@ function missionView(settings) {
   const provider = saved.provider || settings.provider || "opencode";
   const model = saved.model || settings.model || "";
   const demo = state.health.demo
-    ? `<button class="btn" type="button" data-action="demo" data-testid="load-demo">Load example.com demo</button>`
+    ? `<button class="btn" type="button" data-action="demo" data-testid="load-demo">Load example.com demo</button>
+       <button class="btn" type="button" data-action="local-demo" data-testid="load-local-demo">Load local demo</button>`
     : "";
   const answered = state.run
     ? `<p class="answered" data-testid="answered">Answered by <strong>${esc(providerTitle(state.run.provider))}</strong>${state.run.model ? ` · ${esc(state.run.model)}` : ""}</p>`
@@ -261,13 +266,16 @@ function missionView(settings) {
           <textarea id="authorization" name="authorization" required minlength="20" placeholder="I am authorized to test these assets under the program rules.">${esc(saved.authorization)}</textarea>
           <label for="target">Target</label>
           <input id="target" name="target" required data-testid="target" placeholder="www.example.com" value="${esc(saved.target)}" />
-          <label for="intensity">Intensity</label>
-          <select id="intensity" name="intensity" data-testid="intensity">
-            <option value="passive" ${saved.intensity === "passive" ? "selected" : ""}>Passive - no packets to the target</option>
-            <option value="light" ${saved.intensity === "light" ? "selected" : ""}>Light - homepage, headers, web ports</option>
-            <option value="standard" ${saved.intensity === "standard" ? "selected" : ""}>Standard - light, plus installed binaries</option>
+          <label for="mode">Scanning mode</label>
+          <select id="mode" name="mode" data-testid="scan-mode">
+            <option value="passive" ${saved.mode === "passive" ? "selected" : ""}>Passive - no packets to the target</option>
+            <option value="soft-active" ${saved.mode === "soft-active" ? "selected" : ""}>Soft-active - homepage, headers, fixed ports</option>
+            <option value="active-test" ${saved.mode === "active-test" ? "selected" : ""}>Active-test - opt-in, attestation required</option>
           </select>
-          <p class="help">Passive uses resolvers, certificate logs, and RDAP. Light adds one homepage fetch, headers, four web ports, and public well-known paths. Standard also runs subfinder or httpx when those binaries are installed.</p>
+          <input type="hidden" name="intensity" value="${esc(saved.mode === "active-test" ? "standard" : saved.mode === "soft-active" ? "light" : "passive")}" />
+          <label for="attestation">Attestation (required for active-test)</label>
+          <textarea id="attestation" name="attestation" minlength="40" placeholder="I am authorized to run non-destructive checks on the in-scope assets.">${esc(saved.attestation || "")}</textarea>
+          <p class="help">Passive uses resolvers, certificate logs, and RDAP. Soft-active adds one homepage fetch, headers, and a fixed web-port list. Active-test also allows locked optional binaries after you approve the check and write an attestation. Missing binaries are skipped.</p>
           <label for="run_provider">Provider for this run</label>
           <select id="run_provider" name="run_provider" data-testid="run-provider">
             ${providerOptions(provider)}
@@ -359,6 +367,8 @@ function findingsView() {
       <span class="sev ${esc(group.severity)}">${esc(group.severity)}</span>
       <strong>${esc(group.title)}</strong>
       <p class="evidence">${esc(group.hosts.length)} host${group.hosts.length === 1 ? "" : "s"} - ${esc(group.hosts.join(", "))} - ${esc(group.tool)}</p>
+      ${group.confidence ? `<p class="evidence">Confidence ${esc(group.confidence)}. Needs human validation.</p>` : ""}
+      ${group.repro ? `<pre class="log">${esc(group.repro)}</pre>` : ""}
       ${group.explained ? `<p class="plain" id="plain-${esc(group.id)}">${esc(group.plain)}</p>` : `<p class="plain muted" id="plain-${esc(group.id)}"></p>`}
       ${playbookDetails(group.playbook)}
       <button class="btn" type="button" data-action="explain" data-id="${esc(group.id)}" data-testid="explain">Explain</button>
@@ -435,6 +445,8 @@ function groupFindings(rows) {
         plain: row.plain || "",
         explained: Boolean(state.explained && state.explained[row.id]),
         playbook: row.playbook || null,
+        confidence: row.confidence || "",
+        repro: row.repro || "",
       });
       continue;
     }
@@ -735,10 +747,12 @@ function scopeFromForm(form) {
     exclude: data.exclude.split(/\n+/).map((line) => line.trim()).filter(Boolean),
     authorization: data.authorization,
     target: data.target.trim(),
-    intensity: data.intensity,
+    mode: data.mode || "passive",
+    intensity: data.mode === "active-test" ? "standard" : data.mode === "soft-active" ? "light" : "passive",
+    attestation: data.attestation || "",
     active_approved: form.elements.active_approved.checked,
     notion: form.elements.notion_yes && form.elements.notion_yes.checked ? "yes" : "ask",
-    demo: state.demoLoaded && (data.target.trim() === "example.com" || data.target.trim() === "www.example.com"),
+    demo: (state.demoLoaded && (data.target.trim() === "example.com" || data.target.trim() === "www.example.com")) || (state.localDemo && data.target.trim() === "127.0.0.1"),
     provider: data.run_provider || "",
     model: data.run_model || "",
   };
@@ -798,8 +812,11 @@ document.body.addEventListener("submit", async (event) => {
     if (form.id === "missionForm") {
       rememberMission(form);
       const body = scopeFromForm(form);
-      if (body.intensity !== "passive" && !body.active_approved) {
-        throw new Error("Check the approval box before an active run.");
+      if (body.mode !== "passive" && !body.active_approved) {
+        throw new Error("Check the approval box before a soft-active or active-test run.");
+      }
+      if (body.mode === "active-test" && (body.attestation || "").trim().length < 40) {
+        throw new Error("Active-test needs an attestation of at least 40 characters.");
       }
       state.busy = true;
       state.log = [];
@@ -867,7 +884,26 @@ document.body.addEventListener("click", async (event) => {
     }
     return;
   }
+  if (action === "local-demo") {
+    state.localDemo = true;
+    state.demoLoaded = false;
+    state.draft = {
+      program: "CYBOT local demo",
+      include: "127.0.0.1",
+      exclude: "",
+      authorization: "Local demo only. I am authorized to review the bundled app on 127.0.0.1.",
+      target: "127.0.0.1",
+      intensity: "standard",
+      mode: "active-test",
+      attestation: "I am authorized to validate the bundled local demo on 127.0.0.1 only.",
+      active: true,
+    };
+    state.view = "mission";
+    render();
+    return;
+  }
   if (action === "demo") {
+    state.localDemo = false;
     state.draft = {
       program: "CYBOT demo",
       include: "example.com\nwww.example.com",
@@ -875,6 +911,7 @@ document.body.addEventListener("click", async (event) => {
       authorization: "Demo fixture only. I am authorized to review this local example.com fixture.",
       target: "www.example.com",
       intensity: "light",
+      mode: "soft-active",
       active: true,
     };
     state.demoLoaded = true;

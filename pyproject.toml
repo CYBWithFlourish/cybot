@@ -13,6 +13,7 @@ dependencies = [
   "pydantic>=2.9",
   "cryptography>=43",
   "fpdf2>=2.8",
+  "flask>=3.0",
 ]
 
 [project.optional-dependencies]

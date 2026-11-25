@@ -104,7 +104,7 @@ def normalize_host(target: str) -> str:
     return host
 
 
-def check_scope(scope: Scope, target: str) -> Decision:
+def check_scope(scope: Scope, target: str, *, allow_demo: bool = False) -> Decision:
     try:
         host = normalize_host(target)
     except ScopeError as exc:
@@ -114,12 +114,13 @@ def check_scope(scope: Scope, target: str) -> Decision:
         return Decision(False, host, blocked, "reserved")
     if _is_ipv4(host):
         if not _public_ipv4(host):
-            return Decision(
-                False,
-                host,
-                "Private, loopback, link-local, and other non-public addresses are blocked even if you list them.",
-                "non-public-ip",
-            )
+            if not (allow_demo and host == "127.0.0.1"):
+                return Decision(
+                    False,
+                    host,
+                    "Private, loopback, link-local, and other non-public addresses are blocked even if you list them.",
+                    "non-public-ip",
+                )
     for pattern in scope.exclude:
         if host_matches(host, pattern):
             return Decision(False, host, f"{host} matches an exclusion ({pattern}).", "exclude")

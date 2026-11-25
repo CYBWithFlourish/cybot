@@ -193,6 +193,8 @@ Exposed tools: `check_scope`, `start_recon`, `get_status`, `get_findings`, `expl
 
 `get_playbook` returns the research playbook for one finding id: why it matters, manual checks, evidence to capture, and reference links. Optional Notion tracker properties `Next steps`, `References`, `EPSS`, and `KEV` are filled when those columns exist.
 
+`start_recon` accepts `mode` (`passive`, `soft-active`, `active-test`) and `attestation`. Active-test is rejected without an attestation. Telegram cannot set that mode.
+
 `start_recon` accepts `publish_to_notion` (boolean); omitting it leaves Notion unpublished until `publish_report_to_notion` is called explicitly.
 
 ### Telegram
@@ -204,9 +206,27 @@ When `TELEGRAM_BOT_TOKEN` (or vault `telegram`) is set, CYBOT long-polls the Tel
 ## Security & Scope Safety
 
 1. **Scope Enforcement:** Targets must match an `include` rule (`*.domain` matches one subdomain label; `.domain` matches apex and subdomains), not match an `exclude` rule, and resolve exclusively to public IP addresses.
-2. **No Exploitation or Fuzzing:** `PUBLIC_PATHS` strictly avoids sensitive files (`.env`, `.git`, admin/backup paths). `nmap`, `nuclei`, `ffuf`, `sqlmap`, `OWASP ZAP`, and `Burp Suite` are intentionally excluded (`src/cybot/catalog.py`). Optional `subfinder` and `httpx` binaries run with locked argument vectors and no shell.
+2. **No Exploitation or Fuzzing:** `PUBLIC_PATHS` strictly avoids sensitive files (`.env`, `.git`, admin/backup paths). Optional binaries run with locked argument vectors and no shell. `OWASP ZAP`, `Burp Suite`, Metasploit, and credential tools stay excluded (`src/cybot/catalog.py`). See Scanning modes and safety.
 3. **Output & Secret Hygiene:** Secret values are encrypted at rest with Fernet, never returned by the API, and redacted from error messages and explanations. LLM explanations reject code blocks and exploit-like tokens.
 4. **Web & API Hardening:** Scrypt-hashed dashboard password, `HttpOnly; SameSite=Strict` cookies, `X-CYBOT: 1` header check on mutating API routes, login rate limiting, and `Content-Security-Policy` headers.
+
+---
+
+## Scanning modes and safety
+
+Every check goes through the same rails before a packet or a binary is used: scope, rate limit, request budget, opt-in approval, and (for active-test) a written attestation. A missing binary is skipped. CYBOT records a confidence score, a curl command a person can retest, and `needs_human_validation`. It does not confirm a vulnerability.
+
+| Mode | What it may do | What it requires |
+| --- | --- | --- |
+| **passive** | Resolvers, certificate logs, RDAP, and optional `subfinder`, `dnsx`, `dig`, `whois`. No packets to the target. | A saved in-scope target. Telegram `/recon` and `/scan` stay here. |
+| **soft-active** | One homepage fetch, header notes, a fixed web-port connect (`80`, `443`, `8080`, `8443`), and optional `httpx`, `whatweb`, `wafw00f`, `naabu`, `nmap -sT`. | The approval checkbox. |
+| **active-test** | The soft-active set, plus optional `katana`, `nuclei` (info/low exposure tags only), `ffuf` and `gobuster` on a short public-path list, `dalfox` without a blind callback, and `sqlmap` boolean detection only. | The approval checkbox and an attestation of at least 40 characters that says you are authorized. |
+
+Refused in every mode: `sudo`, raw SYN scans, NSE scripts, `sqlmap` dump or shell or file read, and any host outside the include list. Private, loopback, link-local, and metadata addresses are blocked. The only exception is the bundled demo app on `127.0.0.1`, and only when demo mode is on and the run is active-test.
+
+The demo app is `src/cybot/demo_app.py`. It binds to `127.0.0.1` only and includes a reflected query parameter and a boolean SQLite lookup so validation can be practiced on this machine. Load it from the dashboard with **Load local demo**.
+
+Optional tools are installed with `sh scripts/install-scan-tools.sh`. The script prints `ready` or `missing` for each binary and exits 0 even when some are absent. `sh scripts/install-scan-tools.sh --install` tries distro packages for `nmap`, `whatweb`, `wafw00f`, `dnsutils`, and `whois`, then still exits 0 if that fails.
 
 ---
 

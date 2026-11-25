@@ -33,6 +33,11 @@ TOOLS = [
                 "exclude": {"type": "array", "items": {"type": "string"}},
                 "authorization": {"type": "string"},
                 "intensity": {"type": "string", "enum": ["passive", "light", "standard"]},
+                "mode": {"type": "string", "enum": ["passive", "soft-active", "active-test"]},
+                "attestation": {
+                    "type": "string",
+                    "description": "Required for active-test. At least 40 characters stating that you are authorized.",
+                },
                 "active_approved": {"type": "boolean"},
                 "publish_to_notion": {
                     "type": "boolean",

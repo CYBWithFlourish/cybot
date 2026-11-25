@@ -72,6 +72,8 @@ class RunIn(ScopeIn):
     notion: str = "ask"
     provider: str = ""
     model: str = ""
+    mode: str = ""
+    attestation: str = ""
 
 
 class ConnectorTestIn(BaseModel):
