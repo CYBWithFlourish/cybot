@@ -66,6 +66,23 @@ TOOLS = [
         },
     },
     {
+        "name": "kb_ingest",
+        "description": "Embed the vendored knowledge catalog into the cybot-kb Pinecone namespace. Idempotent: the same document id is overwritten.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "kb_search",
+        "description": "Search the cybot-kb namespace. Returned URLs come from the vendored catalog.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "k": {"type": "integer"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "run_command",
         "description": "Run one allowlisted command for a mission. Scope, rate, budget, and attestation rails apply. Active-test does not run until confirm is true.",
         "inputSchema": {
@@ -203,6 +220,25 @@ class MCPServer:
             payload = self.service.status(str(arguments.get("run_id") or ""))
         elif name == "get_findings":
             payload = {"findings": self.service.findings(str(arguments.get("run_id") or ""))}
+        elif name == "kb_ingest":
+            from cybot.kb import ingest
+
+            gateway = await self.service._gateway()
+            payload = await ingest(gateway, self.service.store.settings())
+            payload.pop("ids", None)
+        elif name == "kb_search":
+            from cybot.kb import search
+
+            gateway = await self.service._gateway()
+            k = arguments.get("k") or 5
+            payload = {
+                "matches": await search(
+                    gateway,
+                    self.service.store.settings(),
+                    str(arguments.get("query") or ""),
+                    int(k),
+                )
+            }
         elif name == "run_command":
             payload = self.service.run_terminal(
                 str(arguments.get("mission_id") or ""),

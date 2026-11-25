@@ -236,6 +236,16 @@ Passive and soft-active commands run after the check. Active-test stays in confi
 
 ---
 
+## Knowledge base
+
+CYBOT can cite a vendored catalog while it writes a finding's next steps. The files live in `data/knowledge/` and are copied from [CYBWithFlourish/Awesome-Hacking-with-AI](https://github.com/CYBWithFlourish/Awesome-Hacking-with-AI) (MIT license): `resource-catalog.json` and the guide notes for agentic security, AI security, MCP, models, and evidence. Nothing is fetched at runtime.
+
+`cybot kb ingest` chunks the guides, turns each catalog entry into a document, embeds them with the existing Pinecone path, and upserts them into the `cybot-kb` namespace. That namespace is separate from per-program memory. The command is idempotent: each document has a stable id, and a later ingest overwrites that id instead of inserting a duplicate. `cybot kb search "query"` prints the top titles and catalog URLs. The same actions are available as the MCP tools `kb_ingest` and `kb_search`.
+
+When a playbook is built, CYBOT retrieves the closest catalog entries and lists them under **Further reading / techniques**, separate from the deterministic CVE reference links. A URL is included only when it is the entry's `canonical_url`. The model does not invent knowledge-base links.
+
+You need a granted Pinecone connector and an index (set the index name in Settings) before `cybot kb ingest` can write vectors.
+
 ## License
 
 Released under the [MIT License](LICENSE).

@@ -486,6 +486,11 @@ def render_playbook_markdown(book: dict) -> list[str]:
         lines.append(f"  - {link.get('label')}: {link.get('url')}")
     for link in book.get("writeups") or []:
         lines.append(f"  - Writeup ({link.get('label')}): {link.get('url')}")
+    further = book.get("further_reading") or []
+    if further:
+        lines.append("- Further reading / techniques:")
+        for link in further:
+            lines.append(f"  - {link.get('label')}: {link.get('url')}")
     lines.append("")
     return lines
 
@@ -610,7 +615,7 @@ async def search_writeups(gateway, cve: str) -> list[dict]:
     return []
 
 
-async def prepare_playbooks(llm, gateway, run: dict, findings: list[dict], fetch=None, on_fail=None) -> tuple[dict, list[dict]]:
+async def prepare_playbooks(llm, gateway, run: dict, findings: list[dict], fetch=None, on_fail=None, settings=None) -> tuple[dict, list[dict]]:
     """Build target notes and one playbook per finding. Never raises."""
     notes = target_notes(run, findings)
     books = [template_playbook(row) for row in findings]
@@ -639,6 +644,11 @@ async def prepare_playbooks(llm, gateway, run: dict, findings: list[dict], fetch
             writeups[cve] = await search_writeups(gateway, cve)
         except Exception:
             writeups[cve] = []
+    if gateway is not None and settings is not None:
+        from cybot.kb import further_reading
+
+        for row, book in zip(findings, books):
+            book["further_reading"] = await further_reading(gateway, settings, row, book)
     enriched = []
     for row, book in zip(findings, books):
         ids = cve_ids(row)

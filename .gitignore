@@ -1,6 +1,8 @@
 .venv/
 venv/
-data/
+data/*
+!data/knowledge/
+!data/knowledge/**
 __pycache__/
 *.py[cod]
 .pytest_cache/

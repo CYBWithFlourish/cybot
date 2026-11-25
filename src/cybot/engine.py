@@ -352,7 +352,7 @@ async def _body(
             store.event(run_id, "warn", failure_line("narrative", llm.name, exc))
 
         notes, enriched = await prepare_playbooks(
-            llm, gateway, finished, saved, fetch=None, on_fail=_narrative_failed
+            llm, gateway, finished, saved, fetch=None, on_fail=_narrative_failed, settings=settings
         )
         store.set_run_playbook(run_id, json.dumps(notes))
         for row in enriched:

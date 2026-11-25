@@ -402,6 +402,18 @@ function targetNotes() {
     </section>`;
 }
 
+function furtherBlock(book) {
+  const items = (book.further_reading || []).filter((item) => item && item.url && item.url.startsWith("http"));
+  if (!items.length) return "";
+  const links = items.map((item) => `<li><a href="${esc(item.url)}" rel="noreferrer">${esc(item.label || item.url)}</a></li>`).join("");
+  return `
+    <details class="playbook" data-testid="further-reading">
+      <summary>Further reading / techniques</summary>
+      <p class="help">From the vendored catalog. Separate from the CVE reference links.</p>
+      <ul>${links}</ul>
+    </details>`;
+}
+
 function playbookDetails(book) {
   if (!book) return "";
   const steps = (book.verify || []).map((item) => `<li><code>${esc(item)}</code></li>`).join("");
@@ -429,7 +441,8 @@ function playbookDetails(book) {
     <details class="playbook">
       <summary>References</summary>
       <ul>${refs || "<li>No reference links for this note.</li>"}</ul>
-    </details>`;
+    </details>
+    ${furtherBlock(book)}`;
 }
 
 function groupFindings(rows) {
